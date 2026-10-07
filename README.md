@@ -1,28 +1,27 @@
 # Pomodoro App
 
 Temporizador Pomodoro open source para Android, hecho con Flutter.
-Pensado para ayudarte a concentrarte con ciclos de trabajo y descanso,
-sin anuncios, sin cuentas y sin rastreo.
+Sin anuncios, sin cuentas y sin rastreo: tus datos se quedan en tu teléfono.
 
-## ¿Qué es la técnica Pomodoro?
-Trabajas 25 minutos con total enfoque, descansas 5 y repites.
-Cada 4 ciclos haces un descanso largo.
+## Descarga
+Baja el APK más reciente desde la página de
+[Releases](../../releases/latest) e instálalo en tu Android.
+Android te pedirá permiso para instalar apps de fuera de Google Play.
 
 ## Características
-- [x] Temporizador de foco y descanso
-- [x] Sonido o vibración al terminar cada ciclo
-- [x] Duraciones configurables
+- [x] Temporizador de enfoque y descansos (corto y largo)
+- [x] Sonido y vibración al terminar cada ciclo
+- [x] Duraciones y ciclos configurables
 - [x] Estadísticas diarias y semanales
-- [ ] Tema claro y oscuro
-- [ ] Funcionamiento en segundo plano
+- [x] Tema claro y oscuro (según el sistema)
+- [ ] Funcionamiento con la pantalla bloqueada
 
-## Cómo ejecutarlo
+## Ejecutarlo desde el código
     flutter pub get
     flutter run
 
 ## Contribuir
-¡Las contribuciones son bienvenidas! Abre un *issue* con tu idea
-o envía un *pull request*.
+Lee [CONTRIBUTING.md](CONTRIBUTING.md). ¡Toda ayuda es bienvenida!
 
 ## Licencia
-Distribuido bajo licencia MIT. Consulta el archivo [LICENSE](LICENSE).
+MIT. Consulta el archivo [LICENSE](LICENSE).
