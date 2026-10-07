@@ -8,6 +8,9 @@ import 'pomodoro_phase.dart';
 import 'settings.dart';
 import 'settings_page.dart';
 
+import 'stats.dart';
+import 'stats_page.dart';
+
 /// Pantalla principal con el temporizador.
 class PomodoroPage extends StatefulWidget {
   const PomodoroPage({super.key, required this.initialSettings});
@@ -79,8 +82,11 @@ class _PomodoroPageState extends State<PomodoroPage> {
 
   void _completePhase() {
     _timer?.cancel();
-    if (_phase == PomodoroPhase.focus) _completedFocus++;
-    final next = _nextPhase();
+    if (_phase == PomodoroPhase.focus) {
+      _completedFocus++;
+      // Solo se registran las sesiones de enfoque completadas hasta el final.
+      StatsRepository.recordSession(_settings.durationOf(_phase).inMinutes);
+    }    final next = _nextPhase();
     setState(() {
       _phase = next;
       _remaining = _settings.durationOf(next);
@@ -109,6 +115,12 @@ class _PomodoroPageState extends State<PomodoroPage> {
         debugPrint('No se pudo reproducir el sonido: $e');
       }
     }
+  }
+
+  void _openStats() {
+    Navigator.of(context).push(
+      MaterialPageRoute(builder: (_) => const StatsPage()),
+    );
   }
 
   // ---------- Ajustes ----------
@@ -159,6 +171,11 @@ class _PomodoroPageState extends State<PomodoroPage> {
         title: const Text('🍅 Pomodoro'),
         centerTitle: true,
         actions: [
+          IconButton(
+            icon: const Icon(Icons.bar_chart),
+            tooltip: 'Estadísticas',
+            onPressed: _openStats,
+          ),
           IconButton(
             icon: const Icon(Icons.settings),
             tooltip: 'Ajustes',

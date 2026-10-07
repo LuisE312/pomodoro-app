@@ -9,11 +9,12 @@ Trabajas 25 minutos con total enfoque, descansas 5 y repites.
 Cada 4 ciclos haces un descanso largo.
 
 ## Características
-- [ ] Temporizador de foco y descanso
-- [ ] Sonido o vibración al terminar cada ciclo
-- [ ] Duraciones configurables
-- [ ] Estadísticas diarias y semanales
+- [x] Temporizador de foco y descanso
+- [x] Sonido o vibración al terminar cada ciclo
+- [x] Duraciones configurables
+- [x] Estadísticas diarias y semanales
 - [ ] Tema claro y oscuro
+- [ ] Funcionamiento en segundo plano
 
 ## Cómo ejecutarlo
     flutter pub get
