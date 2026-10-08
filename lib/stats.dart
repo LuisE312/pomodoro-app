@@ -65,4 +65,35 @@ class StatsRepository {
     final prefs = await SharedPreferences.getInstance();
     await prefs.remove(_key);
   }
+
+  /// Calcula la racha actual de días consecutivos con al menos una sesión.
+  static int calculateStreak(Map<String, DayStats> data, [DateTime? relativeTo]) {
+    final now = relativeTo ?? DateTime.now();
+    final todayKey = dayKey(now);
+    final todayStats = data[todayKey];
+
+    var streak = 0;
+    var checkDate = now;
+
+    if (todayStats != null && todayStats.sessions > 0) {
+      streak++;
+      checkDate = checkDate.subtract(const Duration(days: 1));
+    } else {
+      // Si hoy aún no hay sesiones, comprobamos si la racha venía de ayer.
+      checkDate = checkDate.subtract(const Duration(days: 1));
+    }
+
+    while (true) {
+      final key = dayKey(checkDate);
+      final stats = data[key];
+      if (stats != null && stats.sessions > 0) {
+        streak++;
+        checkDate = checkDate.subtract(const Duration(days: 1));
+      } else {
+        break;
+      }
+    }
+
+    return streak;
+  }
 }

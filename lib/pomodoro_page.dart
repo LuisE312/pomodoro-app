@@ -1,258 +1,293 @@
-import 'dart:async';
+import 'dart:math' as math;
 
-import 'package:audioplayers/audioplayers.dart';
-import 'package:flutter/material.dart';
-import 'package:flutter/services.dart';
+import 'package:material_ui/material_ui.dart';
 
+import 'notification_service.dart';
 import 'pomodoro_phase.dart';
-import 'settings.dart';
-import 'settings_page.dart';
+import 'timer_controller.dart';
 
-import 'stats.dart';
-import 'stats_page.dart';
+class PomodoroPage extends StatelessWidget {
+  const PomodoroPage({super.key, required this.controller});
 
-/// Pantalla principal con el temporizador.
-class PomodoroPage extends StatefulWidget {
-  const PomodoroPage({super.key, required this.initialSettings});
+  final TimerController controller;
 
-  final PomodoroSettings initialSettings;
+  static const double _ringSize = 280;
 
-  @override
-  State<PomodoroPage> createState() => _PomodoroPageState();
-}
-
-class _PomodoroPageState extends State<PomodoroPage> {
-  late PomodoroSettings _settings = widget.initialSettings;
-  PomodoroPhase _phase = PomodoroPhase.focus;
-  late Duration _remaining = _settings.durationOf(_phase);
-  bool _isRunning = false;
-  int _completedFocus = 0;
-  Timer? _timer;
-  DateTime? _endTime;
-  final AudioPlayer _player = AudioPlayer();
-
-  @override
-  void dispose() {
-    _timer?.cancel();
-    _player.dispose();
-    super.dispose();
-  }
-
-  // ---------- Control del temporizador ----------
-
-  void _start() {
-    if (_isRunning) return;
-    _endTime = DateTime.now().add(_remaining);
-    _timer = Timer.periodic(const Duration(milliseconds: 250), (_) => _tick());
-    setState(() => _isRunning = true);
-  }
-
-  void _pause() {
-    _timer?.cancel();
-    setState(() => _isRunning = false);
-  }
-
-  void _reset() {
-    _timer?.cancel();
-    setState(() {
-      _remaining = _settings.durationOf(_phase);
-      _isRunning = false;
-    });
-  }
-
-  void _tick() {
-    final left = _endTime!.difference(DateTime.now());
-    if (left <= Duration.zero) {
-      _completePhase();
-    } else {
-      setState(() => _remaining = left);
-    }
-  }
-
-  // ---------- Cambio de fase ----------
-
-  /// Decide qué fase sigue: después del enfoque viene un descanso
-  /// (largo cada N ciclos); después de un descanso, otro enfoque.
-  PomodoroPhase _nextPhase() {
-    if (_phase != PomodoroPhase.focus) return PomodoroPhase.focus;
-    final isLongBreakTurn =
-        _completedFocus % _settings.cyclesBeforeLongBreak == 0;
-    return isLongBreakTurn ? PomodoroPhase.longBreak : PomodoroPhase.shortBreak;
-  }
-
-  void _completePhase() {
-    _timer?.cancel();
-    if (_phase == PomodoroPhase.focus) {
-      _completedFocus++;
-      // Solo se registran las sesiones de enfoque completadas hasta el final.
-      StatsRepository.recordSession(_settings.durationOf(_phase).inMinutes);
-    }    final next = _nextPhase();
-    setState(() {
-      _phase = next;
-      _remaining = _settings.durationOf(next);
-      _isRunning = false;
-    });
-    _notifyPhaseEnd();
-  }
-
-  /// Avisa al usuario con vibración y sonido, según sus ajustes.
-  Future<void> _vibrate() async {
-    for (var i = 0; i < 3; i++) {
-      await HapticFeedback.heavyImpact();
-      await Future<void>.delayed(const Duration(milliseconds: 250));
-    }
-  }
-
-  /// Avisa al usuario con vibración y sonido, según sus ajustes.
-  Future<void> _notifyPhaseEnd() async {
-    if (_settings.vibrationEnabled) {
-      _vibrate();
-    }
-    if (_settings.soundEnabled) {
-      try {
-        await _player.play(AssetSource('sounds/bell.wav'));
-      } catch (e) {
-        debugPrint('No se pudo reproducir el sonido: $e');
-      }
-    }
-  }
-
-  void _openStats() {
-    Navigator.of(context).push(
-      MaterialPageRoute(builder: (_) => const StatsPage()),
-    );
-  }
-
-  // ---------- Ajustes ----------
-
-  Future<void> _openSettings() async {
-    final updated = await Navigator.of(context).push<PomodoroSettings>(
-      MaterialPageRoute(builder: (_) => SettingsPage(settings: _settings)),
-    );
-    if (updated == null) return;
-    await updated.save();
-    if (!mounted) return;
-
-    // Si el temporizador está intacto, adoptamos la nueva duración.
-    // Si está pausado a medias, no borramos su progreso.
-    final untouched = !_isRunning && _remaining == _settings.durationOf(_phase);
-    setState(() {
-      _settings = updated;
-      if (untouched) _remaining = _settings.durationOf(_phase);
-    });
-  }
-
-  // ---------- Presentación ----------
-
-  String get _timeText {
-    final totalSeconds = (_remaining.inMilliseconds / 1000).ceil();
+  String _timeText(Duration remaining) {
+    final totalSeconds = (remaining.inMilliseconds / 1000).ceil();
     final minutes = (totalSeconds ~/ 60).toString().padLeft(2, '0');
     final seconds = (totalSeconds % 60).toString().padLeft(2, '0');
     return '$minutes:$seconds';
   }
 
-  /// Cuántos ciclos del grupo actual están completados (para los puntos).
-  int get _filledDots {
-    final n = _settings.cyclesBeforeLongBreak;
-    final r = _completedFocus % n;
-    if (r == 0 && _completedFocus > 0 && _phase == PomodoroPhase.longBreak) {
-      return n;
+  Future<void> _onStart(BuildContext context) async {
+    final granted = await NotificationService.instance.ensurePermission();
+    await controller.start();
+    if (!granted && context.mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text(
+            'Sin permiso de notificaciones no podremos avisarte con la app '
+                'cerrada. Actívalo en Ajustes de Android > Apps > Pomodoro.',
+          ),
+        ),
+      );
     }
-    return r;
   }
 
   @override
   Widget build(BuildContext context) {
-    final total = _settings.durationOf(_phase).inMilliseconds;
-    final progress = (1 - _remaining.inMilliseconds / total).clamp(0.0, 1.0);
+    return ListenableBuilder(
+      listenable: controller,
+      builder: (context, _) {
+        final scheme = Theme.of(context).colorScheme;
+        final textTheme = Theme.of(context).textTheme;
+        final phase = controller.phase;
+        final color = phase.colorIn(scheme);
+        final remaining = controller.remaining;
+        final progress =
+        (1 - remaining.inMilliseconds / controller.total.inMilliseconds)
+            .clamp(0.0, 1.0)
+            .toDouble();
 
-    return Scaffold(
-      appBar: AppBar(
-        title: const Text('🍅 Pomodoro'),
-        centerTitle: true,
-        actions: [
-          IconButton(
-            icon: const Icon(Icons.bar_chart),
-            tooltip: 'Estadísticas',
-            onPressed: _openStats,
+        return Scaffold(
+          body: SafeArea(
+            child: Column(
+              children: [
+                const SizedBox(height: 24),
+                _PhaseChip(phase: phase, color: color),
+                const Spacer(),
+                SizedBox(
+                  width: _ringSize,
+                  height: _ringSize,
+                  child: Stack(
+                    alignment: Alignment.center,
+                    children: [
+                      TweenAnimationBuilder<Color?>(
+                        tween: ColorTween(end: color),
+                        duration: const Duration(milliseconds: 400),
+                        builder: (context, animated, _) => CustomPaint(
+                          size: const Size.square(_ringSize),
+                          painter: _RingPainter(
+                            progress: progress,
+                            color: animated ?? color,
+                            track: scheme.surfaceContainerHighest,
+                          ),
+                        ),
+                      ),
+                      Column(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Text(
+                            _timeText(remaining),
+                            style: textTheme.displayLarge?.copyWith(
+                              fontWeight: FontWeight.w300,
+                              fontFeatures: const [
+                                FontFeature.tabularFigures(),
+                              ],
+                            ),
+                          ),
+                          Text(
+                            controller.isRunning ? 'En curso' : 'Listo',
+                            style: textTheme.bodyMedium?.copyWith(
+                              color: scheme.onSurfaceVariant,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ],
+                  ),
+                ),
+                const SizedBox(height: 28),
+                _CycleDots(
+                  total: controller.settings.cyclesBeforeLongBreak,
+                  filled: controller.filledDots,
+                  color: color,
+                ),
+                const Spacer(),
+                Row(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: [
+                    IconButton.filledTonal(
+                      onPressed: controller.reset,
+                      tooltip: 'Reiniciar',
+                      style: IconButton.styleFrom(
+                        fixedSize: const Size(56, 56),
+                      ),
+                      icon: const Icon(Icons.refresh, size: 28),
+                    ),
+                    const SizedBox(width: 24),
+                    _PlayButton(
+                      running: controller.isRunning,
+                      color: color,
+                      onColor: phase.onColorIn(scheme),
+                      onPressed: controller.isRunning
+                          ? controller.pause
+                          : () => _onStart(context),
+                    ),
+                    const SizedBox(width: 24),
+                    IconButton.filledTonal(
+                      onPressed: controller.skip,
+                      tooltip: 'Saltar fase',
+                      style: IconButton.styleFrom(
+                        fixedSize: const Size(56, 56),
+                      ),
+                      icon: const Icon(Icons.skip_next, size: 28),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 40),
+              ],
+            ),
           ),
-          IconButton(
-            icon: const Icon(Icons.settings),
-            tooltip: 'Ajustes',
-            onPressed: _openSettings,
+        );
+      },
+    );
+  }
+}
+
+/// Píldora que muestra la fase actual.
+class _PhaseChip extends StatelessWidget {
+  const _PhaseChip({required this.phase, required this.color});
+
+  final PomodoroPhase phase;
+  final Color color;
+
+  @override
+  Widget build(BuildContext context) {
+    return AnimatedContainer(
+      duration: const Duration(milliseconds: 400),
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+      decoration: BoxDecoration(
+        color: color.withValues(alpha: 0.14),
+        borderRadius: BorderRadius.circular(24),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(phase.icon, size: 20, color: color),
+          const SizedBox(width: 8),
+          Text(
+            phase.label,
+            style: Theme.of(context).textTheme.titleMedium?.copyWith(
+              color: color,
+              fontWeight: FontWeight.w600,
+            ),
           ),
         ],
       ),
-      body: Center(
-        child: Column(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            Text(
-              _phase.label,
-              style: Theme.of(context).textTheme.headlineMedium?.copyWith(
-                color: _phase.color,
-                fontWeight: FontWeight.bold,
-              ),
+    );
+  }
+}
+
+/// Puntos de progreso del grupo de ciclos: el lleno se alarga.
+class _CycleDots extends StatelessWidget {
+  const _CycleDots({
+    required this.total,
+    required this.filled,
+    required this.color,
+  });
+
+  final int total;
+  final int filled;
+  final Color color;
+
+  @override
+  Widget build(BuildContext context) {
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        for (var i = 0; i < total; i++)
+          AnimatedContainer(
+            duration: const Duration(milliseconds: 300),
+            margin: const EdgeInsets.symmetric(horizontal: 4),
+            width: i < filled ? 24 : 8,
+            height: 8,
+            decoration: BoxDecoration(
+              color: i < filled ? color : color.withValues(alpha: 0.25),
+              borderRadius: BorderRadius.circular(4),
             ),
-            const SizedBox(height: 16),
-            Row(
-              mainAxisAlignment: MainAxisAlignment.center,
-              children: [
-                for (var i = 0; i < _settings.cyclesBeforeLongBreak; i++)
-                  Padding(
-                    padding: const EdgeInsets.symmetric(horizontal: 4),
-                    child: Icon(
-                      i < _filledDots ? Icons.circle : Icons.circle_outlined,
-                      size: 14,
-                      color: PomodoroPhase.focus.color,
-                    ),
-                  ),
-              ],
-            ),
-            const SizedBox(height: 32),
-            SizedBox(
-              width: 260,
-              height: 260,
-              child: Stack(
-                alignment: Alignment.center,
-                children: [
-                  SizedBox.expand(
-                    child: CircularProgressIndicator(
-                      value: progress,
-                      strokeWidth: 10,
-                      color: _phase.color,
-                      backgroundColor: _phase.color.withValues(alpha: 0.15),
-                    ),
-                  ),
-                  Text(
-                    _timeText,
-                    style: Theme.of(context).textTheme.displayLarge?.copyWith(
-                      fontWeight: FontWeight.w300,
-                    ),
-                  ),
-                ],
-              ),
-            ),
-            const SizedBox(height: 48),
-            Row(
-              mainAxisAlignment: MainAxisAlignment.center,
-              children: [
-                FilledButton.icon(
-                  onPressed: _isRunning ? _pause : _start,
-                  icon: Icon(_isRunning ? Icons.pause : Icons.play_arrow),
-                  label: Text(_isRunning ? 'Pausar' : 'Iniciar'),
-                ),
-                const SizedBox(width: 16),
-                OutlinedButton.icon(
-                  onPressed: _reset,
-                  icon: const Icon(Icons.refresh),
-                  label: const Text('Reiniciar'),
-                ),
-              ],
-            ),
-          ],
+          ),
+      ],
+    );
+  }
+}
+
+/// Botón grande que pasa de círculo a cuadrado redondeado al iniciar.
+class _PlayButton extends StatelessWidget {
+  const _PlayButton({
+    required this.running,
+    required this.color,
+    required this.onColor,
+    required this.onPressed,
+  });
+
+  final bool running;
+  final Color color;
+  final Color onColor;
+  final VoidCallback onPressed;
+
+  @override
+  Widget build(BuildContext context) {
+    return Material(
+      color: color,
+      animationDuration: const Duration(milliseconds: 300),
+      clipBehavior: Clip.antiAlias,
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(running ? 28 : 48),
+      ),
+      child: InkWell(
+        onTap: onPressed,
+        child: SizedBox(
+          width: 96,
+          height: 96,
+          child: Icon(
+            running ? Icons.pause : Icons.play_arrow,
+            size: 44,
+            color: onColor,
+          ),
         ),
       ),
     );
   }
+}
+
+/// Dibuja el anillo de progreso con extremos redondeados.
+class _RingPainter extends CustomPainter {
+  _RingPainter({
+    required this.progress,
+    required this.color,
+    required this.track,
+  });
+
+  final double progress;
+  final Color color;
+  final Color track;
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    const stroke = 14.0;
+    final rect = Offset(stroke / 2, stroke / 2) &
+    Size(size.width - stroke, size.height - stroke);
+
+    final paint = Paint()
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = stroke
+      ..strokeCap = StrokeCap.round;
+
+    canvas.drawArc(rect, 0, 2 * math.pi, false, paint..color = track);
+    if (progress > 0) {
+      canvas.drawArc(
+        rect,
+        -math.pi / 2,
+        2 * math.pi * progress,
+        false,
+        paint..color = color,
+      );
+    }
+  }
+
+  @override
+  bool shouldRepaint(_RingPainter old) =>
+      old.progress != progress || old.color != color || old.track != track;
 }

@@ -44,5 +44,27 @@ void main() {
       await StatsRepository.clear();
       expect(await StatsRepository.load(), isEmpty);
     });
+
+    test('calculateStreak calcula racha consecutiva de días activos', () {
+      final now = DateTime(2026, 4, 10);
+      final data = <String, DayStats>{
+        '2026-04-10': const DayStats(sessions: 2, minutes: 50),
+        '2026-04-09': const DayStats(sessions: 1, minutes: 25),
+        '2026-04-08': const DayStats(sessions: 3, minutes: 75),
+        '2026-04-06': const DayStats(sessions: 1, minutes: 25), // Saltó el día 07
+      };
+
+      expect(StatsRepository.calculateStreak(data, now), 3);
+    });
+
+    test('calculateStreak mantiene racha desde ayer si hoy aún no se ha trabajado', () {
+      final now = DateTime(2026, 4, 10);
+      final data = <String, DayStats>{
+        '2026-04-09': const DayStats(sessions: 1, minutes: 25),
+        '2026-04-08': const DayStats(sessions: 2, minutes: 50),
+      };
+
+      expect(StatsRepository.calculateStreak(data, now), 2);
+    });
   });
 }
