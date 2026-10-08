@@ -1,19 +1,22 @@
 import 'package:flutter/material.dart';
 
+import 'notification_service.dart';
 import 'pomodoro_page.dart';
 import 'settings.dart';
+import 'timer_controller.dart';
 
 Future<void> main() async {
-  // Necesario para usar plugins antes de arrancar la app.
   WidgetsFlutterBinding.ensureInitialized();
+  await NotificationService.instance.init();
   final settings = await PomodoroSettings.load();
-  runApp(PomodoroApp(initialSettings: settings));
+  final controller = await TimerController.load(settings);
+  runApp(PomodoroApp(controller: controller));
 }
 
 class PomodoroApp extends StatelessWidget {
-  const PomodoroApp({super.key, required this.initialSettings});
+  const PomodoroApp({super.key, required this.controller});
 
-  final PomodoroSettings initialSettings;
+  final TimerController controller;
 
   @override
   Widget build(BuildContext context) {
@@ -32,7 +35,7 @@ class PomodoroApp extends StatelessWidget {
         useMaterial3: true,
       ),
       themeMode: ThemeMode.system,
-      home: PomodoroPage(initialSettings: initialSettings),
+      home: PomodoroPage(controller: controller),
     );
   }
 }
