@@ -1,16 +1,17 @@
-import 'package:flutter/material.dart';
+import 'dart:math' as math;
+
+import 'package:material_ui/material_ui.dart';
 
 import 'notification_service.dart';
 import 'pomodoro_phase.dart';
-import 'settings.dart';
-import 'settings_page.dart';
-import 'stats_page.dart';
 import 'timer_controller.dart';
 
 class PomodoroPage extends StatelessWidget {
   const PomodoroPage({super.key, required this.controller});
 
   final TimerController controller;
+
+  static const double _ringSize = 280;
 
   String _timeText(Duration remaining) {
     final totalSeconds = (remaining.inMilliseconds / 1000).ceil();
@@ -34,125 +35,108 @@ class PomodoroPage extends StatelessWidget {
     }
   }
 
-  Future<void> _openSettings(BuildContext context) async {
-    final updated = await Navigator.of(context).push<PomodoroSettings>(
-      MaterialPageRoute(
-        builder: (_) => SettingsPage(settings: controller.settings),
-      ),
-    );
-    if (updated != null) await controller.applySettings(updated);
-  }
-
-  void _openStats(BuildContext context) {
-    Navigator.of(context).push(
-      MaterialPageRoute(builder: (_) => const StatsPage()),
-    );
-  }
-
   @override
   Widget build(BuildContext context) {
     return ListenableBuilder(
       listenable: controller,
       builder: (context, _) {
+        final scheme = Theme.of(context).colorScheme;
+        final textTheme = Theme.of(context).textTheme;
         final phase = controller.phase;
+        final color = phase.colorIn(scheme);
         final remaining = controller.remaining;
-        final total = controller.total.inMilliseconds;
         final progress =
-        (1 - remaining.inMilliseconds / total).clamp(0.0, 1.0);
+        (1 - remaining.inMilliseconds / controller.total.inMilliseconds)
+            .clamp(0.0, 1.0)
+            .toDouble();
 
         return Scaffold(
-          appBar: AppBar(
-            title: const Text('🍅 Pomodoro'),
-            centerTitle: true,
-            actions: [
-              IconButton(
-                icon: const Icon(Icons.bar_chart),
-                tooltip: 'Estadísticas',
-                onPressed: () => _openStats(context),
-              ),
-              IconButton(
-                icon: const Icon(Icons.settings),
-                tooltip: 'Ajustes',
-                onPressed: () => _openSettings(context),
-              ),
-            ],
-          ),
-          body: Center(
+          body: SafeArea(
             child: Column(
-              mainAxisAlignment: MainAxisAlignment.center,
               children: [
-                Text(
-                  phase.label,
-                  style: Theme.of(context).textTheme.headlineMedium?.copyWith(
-                    color: phase.color,
-                    fontWeight: FontWeight.bold,
-                  ),
-                ),
-                const SizedBox(height: 16),
-                Row(
-                  mainAxisAlignment: MainAxisAlignment.center,
-                  children: [
-                    for (var i = 0;
-                    i < controller.settings.cyclesBeforeLongBreak;
-                    i++)
-                      Padding(
-                        padding: const EdgeInsets.symmetric(horizontal: 4),
-                        child: Icon(
-                          i < controller.filledDots
-                              ? Icons.circle
-                              : Icons.circle_outlined,
-                          size: 14,
-                          color: PomodoroPhase.focus.color,
-                        ),
-                      ),
-                  ],
-                ),
-                const SizedBox(height: 32),
+                const SizedBox(height: 24),
+                _PhaseChip(phase: phase, color: color),
+                const Spacer(),
                 SizedBox(
-                  width: 260,
-                  height: 260,
+                  width: _ringSize,
+                  height: _ringSize,
                   child: Stack(
                     alignment: Alignment.center,
                     children: [
-                      SizedBox.expand(
-                        child: CircularProgressIndicator(
-                          value: progress,
-                          strokeWidth: 10,
-                          color: phase.color,
-                          backgroundColor: phase.color.withValues(alpha: 0.15),
+                      TweenAnimationBuilder<Color?>(
+                        tween: ColorTween(end: color),
+                        duration: const Duration(milliseconds: 400),
+                        builder: (context, animated, _) => CustomPaint(
+                          size: const Size.square(_ringSize),
+                          painter: _RingPainter(
+                            progress: progress,
+                            color: animated ?? color,
+                            track: scheme.surfaceContainerHighest,
+                          ),
                         ),
                       ),
-                      Text(
-                        _timeText(remaining),
-                        style:
-                        Theme.of(context).textTheme.displayLarge?.copyWith(
-                          fontWeight: FontWeight.w300,
-                        ),
+                      Column(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Text(
+                            _timeText(remaining),
+                            style: textTheme.displayLarge?.copyWith(
+                              fontWeight: FontWeight.w300,
+                              fontFeatures: const [
+                                FontFeature.tabularFigures(),
+                              ],
+                            ),
+                          ),
+                          Text(
+                            controller.isRunning ? 'En curso' : 'Listo',
+                            style: textTheme.bodyMedium?.copyWith(
+                              color: scheme.onSurfaceVariant,
+                            ),
+                          ),
+                        ],
                       ),
                     ],
                   ),
                 ),
-                const SizedBox(height: 48),
+                const SizedBox(height: 28),
+                _CycleDots(
+                  total: controller.settings.cyclesBeforeLongBreak,
+                  filled: controller.filledDots,
+                  color: color,
+                ),
+                const Spacer(),
                 Row(
                   mainAxisAlignment: MainAxisAlignment.center,
                   children: [
-                    FilledButton.icon(
+                    IconButton.filledTonal(
+                      onPressed: controller.reset,
+                      tooltip: 'Reiniciar',
+                      style: IconButton.styleFrom(
+                        fixedSize: const Size(56, 56),
+                      ),
+                      icon: const Icon(Icons.refresh, size: 28),
+                    ),
+                    const SizedBox(width: 24),
+                    _PlayButton(
+                      running: controller.isRunning,
+                      color: color,
+                      onColor: phase.onColorIn(scheme),
                       onPressed: controller.isRunning
                           ? controller.pause
                           : () => _onStart(context),
-                      icon: Icon(
-                        controller.isRunning ? Icons.pause : Icons.play_arrow,
-                      ),
-                      label: Text(controller.isRunning ? 'Pausar' : 'Iniciar'),
                     ),
-                    const SizedBox(width: 16),
-                    OutlinedButton.icon(
-                      onPressed: controller.reset,
-                      icon: const Icon(Icons.refresh),
-                      label: const Text('Reiniciar'),
+                    const SizedBox(width: 24),
+                    IconButton.filledTonal(
+                      onPressed: controller.skip,
+                      tooltip: 'Saltar fase',
+                      style: IconButton.styleFrom(
+                        fixedSize: const Size(56, 56),
+                      ),
+                      icon: const Icon(Icons.skip_next, size: 28),
                     ),
                   ],
                 ),
+                const SizedBox(height: 40),
               ],
             ),
           ),
@@ -160,4 +144,150 @@ class PomodoroPage extends StatelessWidget {
       },
     );
   }
+}
+
+/// Píldora que muestra la fase actual.
+class _PhaseChip extends StatelessWidget {
+  const _PhaseChip({required this.phase, required this.color});
+
+  final PomodoroPhase phase;
+  final Color color;
+
+  @override
+  Widget build(BuildContext context) {
+    return AnimatedContainer(
+      duration: const Duration(milliseconds: 400),
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+      decoration: BoxDecoration(
+        color: color.withValues(alpha: 0.14),
+        borderRadius: BorderRadius.circular(24),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(phase.icon, size: 20, color: color),
+          const SizedBox(width: 8),
+          Text(
+            phase.label,
+            style: Theme.of(context).textTheme.titleMedium?.copyWith(
+              color: color,
+              fontWeight: FontWeight.w600,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+/// Puntos de progreso del grupo de ciclos: el lleno se alarga.
+class _CycleDots extends StatelessWidget {
+  const _CycleDots({
+    required this.total,
+    required this.filled,
+    required this.color,
+  });
+
+  final int total;
+  final int filled;
+  final Color color;
+
+  @override
+  Widget build(BuildContext context) {
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        for (var i = 0; i < total; i++)
+          AnimatedContainer(
+            duration: const Duration(milliseconds: 300),
+            margin: const EdgeInsets.symmetric(horizontal: 4),
+            width: i < filled ? 24 : 8,
+            height: 8,
+            decoration: BoxDecoration(
+              color: i < filled ? color : color.withValues(alpha: 0.25),
+              borderRadius: BorderRadius.circular(4),
+            ),
+          ),
+      ],
+    );
+  }
+}
+
+/// Botón grande que pasa de círculo a cuadrado redondeado al iniciar.
+class _PlayButton extends StatelessWidget {
+  const _PlayButton({
+    required this.running,
+    required this.color,
+    required this.onColor,
+    required this.onPressed,
+  });
+
+  final bool running;
+  final Color color;
+  final Color onColor;
+  final VoidCallback onPressed;
+
+  @override
+  Widget build(BuildContext context) {
+    return Material(
+      color: color,
+      animationDuration: const Duration(milliseconds: 300),
+      clipBehavior: Clip.antiAlias,
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(running ? 28 : 48),
+      ),
+      child: InkWell(
+        onTap: onPressed,
+        child: SizedBox(
+          width: 96,
+          height: 96,
+          child: Icon(
+            running ? Icons.pause : Icons.play_arrow,
+            size: 44,
+            color: onColor,
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+/// Dibuja el anillo de progreso con extremos redondeados.
+class _RingPainter extends CustomPainter {
+  _RingPainter({
+    required this.progress,
+    required this.color,
+    required this.track,
+  });
+
+  final double progress;
+  final Color color;
+  final Color track;
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    const stroke = 14.0;
+    final rect = Offset(stroke / 2, stroke / 2) &
+    Size(size.width - stroke, size.height - stroke);
+
+    final paint = Paint()
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = stroke
+      ..strokeCap = StrokeCap.round;
+
+    canvas.drawArc(rect, 0, 2 * math.pi, false, paint..color = track);
+    if (progress > 0) {
+      canvas.drawArc(
+        rect,
+        -math.pi / 2,
+        2 * math.pi * progress,
+        false,
+        paint..color = color,
+      );
+    }
+  }
+
+  @override
+  bool shouldRepaint(_RingPainter old) =>
+      old.progress != progress || old.color != color || old.track != track;
 }

@@ -11,6 +11,7 @@ class PomodoroSettings {
     this.cyclesBeforeLongBreak = 4,
     this.soundEnabled = true,
     this.vibrationEnabled = true,
+    this.autoStartNext = false,
   });
 
   final int focusMinutes;
@@ -19,6 +20,7 @@ class PomodoroSettings {
   final int cyclesBeforeLongBreak;
   final bool soundEnabled;
   final bool vibrationEnabled;
+  final bool autoStartNext;
 
   /// Duración de cada fase según los ajustes actuales.
   Duration durationOf(PomodoroPhase phase) => switch (phase) {
@@ -34,6 +36,7 @@ class PomodoroSettings {
     int? cyclesBeforeLongBreak,
     bool? soundEnabled,
     bool? vibrationEnabled,
+    bool? autoStartNext,
   }) {
     return PomodoroSettings(
       focusMinutes: focusMinutes ?? this.focusMinutes,
@@ -43,6 +46,7 @@ class PomodoroSettings {
       cyclesBeforeLongBreak ?? this.cyclesBeforeLongBreak,
       soundEnabled: soundEnabled ?? this.soundEnabled,
       vibrationEnabled: vibrationEnabled ?? this.vibrationEnabled,
+      autoStartNext: autoStartNext ?? this.autoStartNext,
     );
   }
 
@@ -59,6 +63,7 @@ class PomodoroSettings {
       prefs.getInt('cyclesBeforeLongBreak') ?? d.cyclesBeforeLongBreak,
       soundEnabled: prefs.getBool('soundEnabled') ?? d.soundEnabled,
       vibrationEnabled: prefs.getBool('vibrationEnabled') ?? d.vibrationEnabled,
+      autoStartNext: prefs.getBool('autoStartNext') ?? d.autoStartNext,
     );
   }
 
@@ -71,5 +76,6 @@ class PomodoroSettings {
     await prefs.setInt('cyclesBeforeLongBreak', cyclesBeforeLongBreak);
     await prefs.setBool('soundEnabled', soundEnabled);
     await prefs.setBool('vibrationEnabled', vibrationEnabled);
+    await prefs.setBool('autoStartNext', autoStartNext);
   }
 }

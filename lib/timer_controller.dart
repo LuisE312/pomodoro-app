@@ -121,6 +121,36 @@ class TimerController extends ChangeNotifier with WidgetsBindingObserver {
     await _notifications.cancelAll();
   }
 
+  /// Salta a la siguiente fase inmediatamente.
+  Future<void> skip() async {
+    final finished = _phase;
+    final wasRunning = _isRunning;
+
+    if (finished == PomodoroPhase.focus) {
+      _completedFocus++;
+      unawaited(
+        StatsRepository.recordSession(_settings.durationOf(finished).inMinutes),
+      );
+    }
+
+    _phase = _phaseAfter(finished, _completedFocus);
+    _remaining = _settings.durationOf(_phase);
+
+    if (wasRunning && _settings.autoStartNext) {
+      _endTime = DateTime.now().add(_remaining);
+      _isRunning = true;
+      await _scheduleNotifications();
+    } else {
+      _isRunning = false;
+      _endTime = null;
+      await _notifications.cancelAll();
+    }
+
+    _updateTicker();
+    notifyListeners();
+    await _persist();
+  }
+
   Future<void> applySettings(PomodoroSettings updated) async {
     // Si el temporizador está intacto, adoptamos la nueva duración.
     // Si está pausado a medias, no borramos su progreso.
@@ -157,15 +187,29 @@ class TimerController extends ChangeNotifier with WidgetsBindingObserver {
         StatsRepository.recordSession(_settings.durationOf(finished).inMinutes),
       );
     }
+    unawaited(
+      _notifications.showCompleted(
+        finishedPhase: finished,
+        settings: _settings,
+      ),
+    );
+
     _phase = _phaseAfter(finished, _completedFocus);
     _remaining = _settings.durationOf(_phase);
-    _isRunning = false;
-    _endTime = null;
+
+    if (_settings.autoStartNext) {
+      _endTime = DateTime.now().add(_remaining);
+      _isRunning = true;
+      unawaited(_scheduleNotifications());
+    } else {
+      _isRunning = false;
+      _endTime = null;
+      unawaited(_notifications.cancelRunning());
+    }
+
     _updateTicker();
     notifyListeners();
     unawaited(_persist());
-    // El aviso de fin NO se cancela: el sistema lo muestra a su hora.
-    unawaited(_notifications.cancelRunning());
   }
 
   Future<void> _scheduleNotifications() async {

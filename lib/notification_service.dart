@@ -1,5 +1,3 @@
-import 'dart:typed_data';
-
 import 'package:flutter/foundation.dart';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 import 'package:timezone/data/latest_all.dart' as tzdata;
@@ -139,6 +137,25 @@ class NotificationService {
     }
   }
 
+  Future<void> showCompleted({
+    required PomodoroPhase finishedPhase,
+    required PomodoroSettings settings,
+  }) async {
+    try {
+      final focusFinished = finishedPhase == PomodoroPhase.focus;
+      await _plugin.show(
+        id: _endId,
+        title: focusFinished ? '¡Enfoque terminado!' : 'Descanso terminado',
+        body: focusFinished
+            ? '¡Buen trabajo! Tómate un descanso'
+            : 'Listo para el siguiente enfoque',
+        notificationDetails: _endDetails(settings),
+      );
+    } catch (e) {
+      debugPrint('No se pudo mostrar la notificación de fin: $e');
+    }
+  }
+
   Future<void> showPaused({
     required PomodoroPhase phase,
     required Duration remaining,
@@ -170,7 +187,21 @@ class NotificationService {
     }
   }
 
-  Future<void> cancelRunning() => _plugin.cancel(id: _runningId);
-  Future<void> cancelEnd() => _plugin.cancel(id: _endId);
-  Future<void> cancelAll() => _plugin.cancelAll();
+  Future<void> cancelRunning() async {
+    try {
+      await _plugin.cancel(id: _runningId);
+    } catch (_) {}
+  }
+
+  Future<void> cancelEnd() async {
+    try {
+      await _plugin.cancel(id: _endId);
+    } catch (_) {}
+  }
+
+  Future<void> cancelAll() async {
+    try {
+      await _plugin.cancelAll();
+    } catch (_) {}
+  }
 }
