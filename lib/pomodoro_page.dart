@@ -1,5 +1,6 @@
 import 'dart:math' as math;
 
+import 'package:flutter/services.dart';
 import 'package:material_ui/material_ui.dart';
 
 import 'notification_service.dart';
@@ -56,46 +57,85 @@ class PomodoroPage extends StatelessWidget {
               children: [
                 const SizedBox(height: 24),
                 _PhaseChip(phase: phase, color: color),
+                const SizedBox(height: 8),
+                Text(
+                  'Meta diaria: ${controller.todaySessions} / ${controller.settings.dailyGoal} 🎯',
+                  style: textTheme.labelLarge?.copyWith(
+                    color: scheme.onSurfaceVariant,
+                  ),
+                ),
+                if (controller.settings.tags.isNotEmpty) ...[
+                  const SizedBox(height: 8),
+                  SingleChildScrollView(
+                    scrollDirection: Axis.horizontal,
+                    padding: const EdgeInsets.symmetric(horizontal: 16),
+                    child: Row(
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      children: [
+                        for (final tag in controller.settings.tags)
+                          Padding(
+                            padding: const EdgeInsets.symmetric(horizontal: 4),
+                            child: FilterChip(
+                              label: Text(tag),
+                              selected: controller.settings.selectedTag == tag,
+                              onSelected: (selected) {
+                                HapticFeedback.selectionClick();
+                                controller.setSelectedTag(selected ? tag : null);
+                              },
+                              visualDensity: VisualDensity.compact,
+                            ),
+                          ),
+                      ],
+                    ),
+                  ),
+                ],
                 const Spacer(),
-                SizedBox(
-                  width: _ringSize,
-                  height: _ringSize,
-                  child: Stack(
-                    alignment: Alignment.center,
-                    children: [
-                      TweenAnimationBuilder<Color?>(
-                        tween: ColorTween(end: color),
-                        duration: const Duration(milliseconds: 400),
-                        builder: (context, animated, _) => CustomPaint(
-                          size: const Size.square(_ringSize),
-                          painter: _RingPainter(
-                            progress: progress,
-                            color: animated ?? color,
-                            track: scheme.surfaceContainerHighest,
+                Semantics(
+                  label: 'Fase de ${phase.label}, quedan ${_timeText(remaining)}, ${controller.isRunning ? 'en curso' : 'en pausa'}',
+                  child: SizedBox(
+                    width: _ringSize,
+                    height: _ringSize,
+                    child: Stack(
+                      alignment: Alignment.center,
+                      children: [
+                        TweenAnimationBuilder<Color?>(
+                          tween: ColorTween(end: color),
+                          duration: const Duration(milliseconds: 400),
+                          builder: (context, animated, _) => CustomPaint(
+                            size: const Size.square(_ringSize),
+                            painter: _RingPainter(
+                              progress: progress,
+                              color: animated ?? color,
+                              track: scheme.surfaceContainerHighest,
+                            ),
                           ),
                         ),
-                      ),
-                      Column(
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          Text(
-                            _timeText(remaining),
-                            style: textTheme.displayLarge?.copyWith(
-                              fontWeight: FontWeight.w300,
-                              fontFeatures: const [
-                                FontFeature.tabularFigures(),
-                              ],
+                        Column(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Text(
+                              _timeText(remaining),
+                              style: textTheme.displayLarge?.copyWith(
+                                fontWeight: FontWeight.w300,
+                                fontFeatures: const [
+                                  FontFeature.tabularFigures(),
+                                ],
+                              ),
                             ),
-                          ),
-                          Text(
-                            controller.isRunning ? 'En curso' : 'Listo',
-                            style: textTheme.bodyMedium?.copyWith(
-                              color: scheme.onSurfaceVariant,
+                            Text(
+                              controller.isRunning
+                                  ? 'En curso'
+                                  : (controller.remaining < controller.total
+                                      ? 'En pausa'
+                                      : 'Listo'),
+                              style: textTheme.bodyMedium?.copyWith(
+                                color: scheme.onSurfaceVariant,
+                              ),
                             ),
-                          ),
-                        ],
-                      ),
-                    ],
+                          ],
+                        ),
+                      ],
+                    ),
                   ),
                 ),
                 const SizedBox(height: 28),
@@ -109,7 +149,10 @@ class PomodoroPage extends StatelessWidget {
                   mainAxisAlignment: MainAxisAlignment.center,
                   children: [
                     IconButton.filledTonal(
-                      onPressed: controller.reset,
+                      onPressed: () {
+                        HapticFeedback.lightImpact();
+                        controller.reset();
+                      },
                       tooltip: 'Reiniciar',
                       style: IconButton.styleFrom(
                         fixedSize: const Size(56, 56),
@@ -121,13 +164,21 @@ class PomodoroPage extends StatelessWidget {
                       running: controller.isRunning,
                       color: color,
                       onColor: phase.onColorIn(scheme),
-                      onPressed: controller.isRunning
-                          ? controller.pause
-                          : () => _onStart(context),
+                      onPressed: () {
+                        HapticFeedback.mediumImpact();
+                        if (controller.isRunning) {
+                          controller.pause();
+                        } else {
+                          _onStart(context);
+                        }
+                      },
                     ),
                     const SizedBox(width: 24),
                     IconButton.filledTonal(
-                      onPressed: controller.skip,
+                      onPressed: () {
+                        HapticFeedback.lightImpact();
+                        controller.skip();
+                      },
                       tooltip: 'Saltar fase',
                       style: IconButton.styleFrom(
                         fixedSize: const Size(56, 56),
@@ -136,7 +187,19 @@ class PomodoroPage extends StatelessWidget {
                     ),
                   ],
                 ),
-                const SizedBox(height: 40),
+                const SizedBox(height: 12),
+                TextButton.icon(
+                  onPressed: () {
+                    HapticFeedback.selectionClick();
+                    controller.extend5Min();
+                  },
+                  icon: const Icon(Icons.add, size: 18),
+                  label: const Text('+5 min'),
+                  style: TextButton.styleFrom(
+                    visualDensity: VisualDensity.compact,
+                  ),
+                ),
+                const SizedBox(height: 24),
               ],
             ),
           ),
@@ -229,22 +292,25 @@ class _PlayButton extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Material(
-      color: color,
-      animationDuration: const Duration(milliseconds: 300),
-      clipBehavior: Clip.antiAlias,
-      shape: RoundedRectangleBorder(
-        borderRadius: BorderRadius.circular(running ? 28 : 48),
-      ),
-      child: InkWell(
-        onTap: onPressed,
-        child: SizedBox(
-          width: 96,
-          height: 96,
-          child: Icon(
-            running ? Icons.pause : Icons.play_arrow,
-            size: 44,
-            color: onColor,
+    return Tooltip(
+      message: running ? 'Pausar' : 'Iniciar',
+      child: Material(
+        color: color,
+        animationDuration: const Duration(milliseconds: 300),
+        clipBehavior: Clip.antiAlias,
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(running ? 28 : 48),
+        ),
+        child: InkWell(
+          onTap: onPressed,
+          child: SizedBox(
+            width: 96,
+            height: 96,
+            child: Icon(
+              running ? Icons.pause : Icons.play_arrow,
+              size: 44,
+              color: onColor,
+            ),
           ),
         ),
       ),

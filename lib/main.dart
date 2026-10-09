@@ -21,25 +21,53 @@ class PomodoroApp extends StatelessWidget {
 
   static const _seed = Colors.red;
 
+  ThemeMode _flutterThemeMode(AppThemeMode mode) => switch (mode) {
+        AppThemeMode.system => ThemeMode.system,
+        AppThemeMode.light => ThemeMode.light,
+        AppThemeMode.dark => ThemeMode.dark,
+      };
+
   @override
   Widget build(BuildContext context) {
-    // Los colores dinámicos vienen nulos si el teléfono no los soporta.
-    return DynamicColorBuilder(
-      builder: (ColorScheme? lightDynamic, ColorScheme? darkDynamic) {
-        final light =
-            lightDynamic ?? ColorScheme.fromSeed(seedColor: _seed);
-        final dark = darkDynamic ??
-            ColorScheme.fromSeed(
-              seedColor: _seed,
-              brightness: Brightness.dark,
+    return ListenableBuilder(
+      listenable: controller,
+      builder: (context, _) {
+        final settings = controller.settings;
+        final themeMode = _flutterThemeMode(settings.themeMode);
+
+        return DynamicColorBuilder(
+          builder: (ColorScheme? lightDynamic, ColorScheme? darkDynamic) {
+            final lightScheme =
+                lightDynamic ?? ColorScheme.fromSeed(seedColor: _seed);
+            var darkScheme = darkDynamic ??
+                ColorScheme.fromSeed(
+                  seedColor: _seed,
+                  brightness: Brightness.dark,
+                );
+
+            if (settings.amoledMode) {
+              darkScheme = darkScheme.copyWith(
+                surface: Colors.black,
+                onSurface: Colors.white,
+              );
+            }
+
+            final darkTheme = ThemeData(
+              colorScheme: darkScheme,
+              useMaterial3: true,
+              scaffoldBackgroundColor:
+                  settings.amoledMode ? Colors.black : null,
             );
-        return MaterialApp(
-          title: 'Pomodoro',
-          debugShowCheckedModeBanner: false,
-          theme: ThemeData(colorScheme: light, useMaterial3: true),
-          darkTheme: ThemeData(colorScheme: dark, useMaterial3: true),
-          themeMode: ThemeMode.system,
-          home: AppShell(controller: controller),
+
+            return MaterialApp(
+              title: 'Pomodoro',
+              debugShowCheckedModeBanner: false,
+              theme: ThemeData(colorScheme: lightScheme, useMaterial3: true),
+              darkTheme: darkTheme,
+              themeMode: themeMode,
+              home: AppShell(controller: controller),
+            );
+          },
         );
       },
     );
