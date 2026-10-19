@@ -7,7 +7,6 @@ void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
 
   setUp(() {
-    // Simula un almacenamiento vacío en cada prueba
     SharedPreferences.setMockInitialValues({});
   });
   group('PomodoroSettings', () {
