@@ -1,8 +1,10 @@
-import 'package:flutter_test/flutter_test.dart';
-import 'package:pomodoro_app/pomodoro_phase.dart';
-import 'package:pomodoro_app/settings.dart';
-
 void main() {
+  TestWidgetsFlutterBinding.ensureInitialized();
+//Puerba
+
+  setUp(() {
+    SharedPreferences.setMockInitialValues({});
+  });
   group('PomodoroSettings', () {
     test('tiene los valores por defecto esperados', () {
       const s = PomodoroSettings();
@@ -53,4 +55,4 @@ void main() {
       expect(loaded.immersiveFocus, false);
     });
   });
-}
+}
