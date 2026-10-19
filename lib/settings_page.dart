@@ -1,6 +1,7 @@
 import 'package:material_ui/material_ui.dart';
 
 import 'settings.dart';
+import 'stats.dart';
 import 'timer_controller.dart';
 
 class SettingsPage extends StatefulWidget {
@@ -72,7 +73,12 @@ class _SettingsPageState extends State<SettingsPage> {
         ],
       ),
     );
-    if (newName != null && newName.isNotEmpty && newName != oldName) {
+    if (newName != null &&
+        newName.isNotEmpty &&
+        newName != oldName &&
+        !_s.tags.contains(newName)) {
+      await StatsRepository.renameTag(oldName, newName);
+      if (!mounted) return;
       final updatedTags = _s.tags.map((t) => t == oldName ? newName : t).toList();
       final updatedSelected = _s.selectedTag == oldName ? newName : _s.selectedTag;
       _apply(_s.copyWith(tags: updatedTags, selectedTag: updatedSelected));
@@ -131,9 +137,38 @@ class _SettingsPageState extends State<SettingsPage> {
     }
   }
 
+  /// Combinaciones habituales de (enfoque, descanso corto, descanso largo).
+  static const _presets = <({String name, int focus, int shortBreak, int longBreak})>[
+    (name: 'Clásico', focus: 25, shortBreak: 5, longBreak: 15),
+    (name: 'Extendido', focus: 50, shortBreak: 10, longBreak: 30),
+    (name: 'Profundo', focus: 60, shortBreak: 15, longBreak: 30),
+  ];
+
+  Future<void> _pickReminderTime() async {
+    final time = await showTimePicker(
+      context: context,
+      initialTime: TimeOfDay(
+        hour: _s.dailyReminderHour,
+        minute: _s.dailyReminderMinute,
+      ),
+    );
+    if (!mounted) return;
+    if (time != null) {
+      _apply(
+        _s.copyWith(
+          dailyReminderHour: time.hour,
+          dailyReminderMinute: time.minute,
+        ),
+      );
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
+    final textTheme = Theme.of(context).textTheme;
+    final reminderText =
+        '${_s.dailyReminderHour.toString().padLeft(2, '0')}:${_s.dailyReminderMinute.toString().padLeft(2, '0')}';
 
     return Scaffold(
       appBar: AppBar(
@@ -147,230 +182,274 @@ class _SettingsPageState extends State<SettingsPage> {
         ],
       ),
       body: ListView(
-        padding: const EdgeInsets.only(bottom: 24),
+        padding: const EdgeInsets.fromLTRB(16, 0, 16, 32),
         children: [
-          const _SectionHeader('Duraciones'),
-          _SliderTile(
-            title: 'Enfoque',
-            icon: Icons.center_focus_strong_outlined,
-            value: _s.focusMinutes,
-            min: 1,
-            max: 60,
-            suffix: 'min',
-            onChanged: (v) => _apply(_s.copyWith(focusMinutes: v)),
+          const _SectionHeader('Temporizador'),
+          _SettingsCard(
+            children: [
+              Padding(
+                padding: const EdgeInsets.fromLTRB(16, 14, 16, 4),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Row(
+                      children: [
+                        Icon(Icons.timer_outlined, color: scheme.onSurfaceVariant),
+                        const SizedBox(width: 16),
+                        const Expanded(child: Text('Preajustes')),
+                      ],
+                    ),
+                    const SizedBox(height: 10),
+                    Wrap(
+                      spacing: 8,
+                      runSpacing: 8,
+                      children: [
+                        for (final p in _presets)
+                          ChoiceChip(
+                            label: Text(
+                              '${p.name} · ${p.focus}/${p.shortBreak}/${p.longBreak}',
+                            ),
+                            selected: _s.focusMinutes == p.focus &&
+                                _s.shortBreakMinutes == p.shortBreak &&
+                                _s.longBreakMinutes == p.longBreak,
+                            onSelected: (_) => _apply(
+                              _s.copyWith(
+                                focusMinutes: p.focus,
+                                shortBreakMinutes: p.shortBreak,
+                                longBreakMinutes: p.longBreak,
+                              ),
+                            ),
+                          ),
+                      ],
+                    ),
+                  ],
+                ),
+              ),
+              _SliderTile(
+                title: 'Enfoque',
+                icon: Icons.center_focus_strong_outlined,
+                value: _s.focusMinutes,
+                min: 1,
+                max: 60,
+                suffix: 'min',
+                onChanged: (v) => _apply(_s.copyWith(focusMinutes: v)),
+              ),
+              _SliderTile(
+                title: 'Descanso corto',
+                icon: Icons.coffee_outlined,
+                value: _s.shortBreakMinutes,
+                min: 1,
+                max: 30,
+                suffix: 'min',
+                onChanged: (v) => _apply(_s.copyWith(shortBreakMinutes: v)),
+              ),
+              _SliderTile(
+                title: 'Descanso largo',
+                icon: Icons.self_improvement,
+                value: _s.longBreakMinutes,
+                min: 1,
+                max: 60,
+                suffix: 'min',
+                onChanged: (v) => _apply(_s.copyWith(longBreakMinutes: v)),
+              ),
+              _SliderTile(
+                title: 'Ciclos antes del descanso largo',
+                icon: Icons.repeat,
+                value: _s.cyclesBeforeLongBreak,
+                min: 2,
+                max: 8,
+                suffix: 'ciclos',
+                onChanged: (v) => _apply(_s.copyWith(cyclesBeforeLongBreak: v)),
+              ),
+              _SliderTile(
+                title: 'Meta diaria de pomodoros',
+                icon: Icons.flag_outlined,
+                value: _s.dailyGoal,
+                min: 1,
+                max: 16,
+                suffix: 'pomodoros',
+                onChanged: (v) => _apply(_s.copyWith(dailyGoal: v)),
+              ),
+              const SizedBox(height: 8),
+            ],
           ),
-          _SliderTile(
-            title: 'Descanso corto',
-            icon: Icons.coffee_outlined,
-            value: _s.shortBreakMinutes,
-            min: 1,
-            max: 30,
-            suffix: 'min',
-            onChanged: (v) => _apply(_s.copyWith(shortBreakMinutes: v)),
-          ),
-          _SliderTile(
-            title: 'Descanso largo',
-            icon: Icons.self_improvement,
-            value: _s.longBreakMinutes,
-            min: 1,
-            max: 60,
-            suffix: 'min',
-            onChanged: (v) => _apply(_s.copyWith(longBreakMinutes: v)),
-          ),
-          _SliderTile(
-            title: 'Ciclos antes del descanso largo',
-            icon: Icons.repeat,
-            value: _s.cyclesBeforeLongBreak,
-            min: 2,
-            max: 8,
-            suffix: 'ciclos',
-            onChanged: (v) => _apply(_s.copyWith(cyclesBeforeLongBreak: v)),
-          ),
-          _SliderTile(
-            title: 'Meta diaria de pomodoros',
-            icon: Icons.flag_outlined,
-            value: _s.dailyGoal,
-            min: 1,
-            max: 16,
-            suffix: 'pomodoros',
-            onChanged: (v) => _apply(_s.copyWith(dailyGoal: v)),
+          const _SectionHeader('Comportamiento'),
+          _SettingsCard(
+            children: [
+              SwitchListTile(
+                secondary: const Icon(Icons.play_circle_outline),
+                title: const Text('Iniciar siguiente fase automáticamente'),
+                subtitle: const Text('Arranca la siguiente fase al terminar el tiempo'),
+                value: _s.autoStartNext,
+                onChanged: (v) => _apply(_s.copyWith(autoStartNext: v)),
+              ),
+              SwitchListTile(
+                secondary: const Icon(Icons.screen_lock_portrait_outlined),
+                title: const Text('Mantener pantalla encendida'),
+                subtitle: const Text('Evita que la pantalla se apague durante el enfoque'),
+                value: _s.keepScreenOn,
+                onChanged: (v) => _apply(_s.copyWith(keepScreenOn: v)),
+              ),
+              SwitchListTile(
+                secondary: const Icon(Icons.fullscreen),
+                title: const Text('Modo enfoque'),
+                subtitle: const Text(
+                  'Oculta la barra inferior mientras corre un enfoque. '
+                  'Pausa para volver a navegar.',
+                ),
+                value: _s.immersiveFocus,
+                onChanged: (v) => _apply(_s.copyWith(immersiveFocus: v)),
+              ),
+            ],
           ),
           const _SectionHeader('Apariencia'),
-          ListTile(
-            leading: const Icon(Icons.palette_outlined),
-            title: const Text('Tema'),
-            trailing: SegmentedButton<AppThemeMode>(
-              segments: const [
-                ButtonSegment(
-                  value: AppThemeMode.system,
-                  label: Text('Sistema'),
+          _SettingsCard(
+            children: [
+              _SegmentedTile<AppThemeMode>(
+                icon: Icons.palette_outlined,
+                title: 'Tema',
+                segments: const [
+                  ButtonSegment(value: AppThemeMode.system, label: Text('Sistema')),
+                  ButtonSegment(value: AppThemeMode.light, label: Text('Claro')),
+                  ButtonSegment(value: AppThemeMode.dark, label: Text('Oscuro')),
+                ],
+                selected: _s.themeMode,
+                onChanged: (v) => _apply(_s.copyWith(themeMode: v)),
+              ),
+              SwitchListTile(
+                secondary: const Icon(Icons.dark_mode_outlined),
+                title: const Text('Modo AMOLED'),
+                subtitle: const Text('Fondo negro puro para pantallas OLED/AMOLED'),
+                value: _s.amoledMode,
+                onChanged: (v) => _apply(_s.copyWith(amoledMode: v)),
+              ),
+              ListTile(
+                leading: Icon(
+                  Icons.auto_awesome_outlined,
+                  color: scheme.onSurfaceVariant,
                 ),
-                ButtonSegment(
-                  value: AppThemeMode.light,
-                  label: Text('Claro'),
+                title: const Text('Colores de la app'),
+                subtitle: const Text(
+                  'Siguen el fondo de pantalla de tu teléfono (Android 12 o '
+                  'superior). En otros casos se usa el rojo Pomodoro.',
                 ),
-                ButtonSegment(
-                  value: AppThemeMode.dark,
-                  label: Text('Oscuro'),
-                ),
-              ],
-              selected: {_s.themeMode},
-              onSelectionChanged: (set) =>
-                  _apply(_s.copyWith(themeMode: set.first)),
-            ),
-          ),
-          SwitchListTile(
-            secondary: const Icon(Icons.dark_mode_outlined),
-            title: const Text('Modo AMOLED'),
-            subtitle: const Text('Fondo negro puro para pantallas OLED/AMOLED'),
-            value: _s.amoledMode,
-            onChanged: (v) => _apply(_s.copyWith(amoledMode: v)),
+              ),
+            ],
           ),
           const _SectionHeader('Etiquetas'),
-          for (final tag in _s.tags)
-            ListTile(
-              leading: const Icon(Icons.label_outline),
-              title: Text(tag),
-              trailing: Row(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  IconButton(
-                    icon: const Icon(Icons.edit_outlined, size: 20),
-                    tooltip: 'Renombrar',
-                    onPressed: () => _renameTag(tag),
+          _SettingsCard(
+            children: [
+              for (final tag in _s.tags)
+                ListTile(
+                  leading: const Icon(Icons.label_outline),
+                  title: Text(tag),
+                  trailing: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      IconButton(
+                        icon: const Icon(Icons.edit_outlined, size: 20),
+                        tooltip: 'Renombrar',
+                        onPressed: () => _renameTag(tag),
+                      ),
+                      if (_s.tags.length > 1)
+                        IconButton(
+                          icon: const Icon(Icons.delete_outline, size: 20),
+                          tooltip: 'Eliminar',
+                          onPressed: () => _deleteTag(tag),
+                        ),
+                    ],
                   ),
-                  if (_s.tags.length > 1)
-                    IconButton(
-                      icon: const Icon(Icons.delete_outline, size: 20),
-                      tooltip: 'Eliminar',
-                      onPressed: () => _deleteTag(tag),
-                    ),
-                ],
+                ),
+              ListTile(
+                leading: Icon(Icons.add, color: scheme.primary),
+                title: Text(
+                  'Nueva etiqueta',
+                  style: textTheme.bodyLarge?.copyWith(color: scheme.primary),
+                ),
+                onTap: _addTag,
               ),
-            ),
-          Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-            child: OutlinedButton.icon(
-              onPressed: _addTag,
-              icon: const Icon(Icons.add),
-              label: const Text('Nueva etiqueta'),
-            ),
-          ),
-          const _SectionHeader('Automatización'),
-          SwitchListTile(
-            secondary: const Icon(Icons.play_circle_outline),
-            title: const Text('Iniciar siguiente fase automáticamente'),
-            subtitle: const Text('Arranca la siguiente fase al terminar el tiempo'),
-            value: _s.autoStartNext,
-            onChanged: (v) => _apply(_s.copyWith(autoStartNext: v)),
-          ),
-          SwitchListTile(
-            secondary: const Icon(Icons.screen_lock_portrait_outlined),
-            title: const Text('Mantener pantalla encendida'),
-            subtitle: const Text('Evita que la pantalla se apague durante el enfoque'),
-            value: _s.keepScreenOn,
-            onChanged: (v) => _apply(_s.copyWith(keepScreenOn: v)),
+            ],
           ),
           const _SectionHeader('Avisos'),
-          SwitchListTile(
-            secondary: const Icon(Icons.volume_up_outlined),
-            title: const Text('Sonido al terminar'),
-            value: _s.soundEnabled,
-            onChanged: (v) => _apply(_s.copyWith(soundEnabled: v)),
-          ),
-          if (_s.soundEnabled)
-            ListTile(
-              leading: const Icon(Icons.queue_music_outlined),
-              title: const Text('Sonido de aviso'),
-              trailing: DropdownButton<AlertSound>(
-                value: _s.alertSound,
-                onChanged: (sound) {
-                  if (sound != null) _apply(_s.copyWith(alertSound: sound));
-                },
-                items: [
-                  for (final sound in AlertSound.values)
-                    DropdownMenuItem(
-                      value: sound,
-                      child: Text(sound.label),
-                    ),
-                ],
+          _SettingsCard(
+            children: [
+              SwitchListTile(
+                secondary: const Icon(Icons.volume_up_outlined),
+                title: const Text('Sonido al terminar'),
+                value: _s.soundEnabled,
+                onChanged: (v) => _apply(_s.copyWith(soundEnabled: v)),
               ),
-            ),
-          SwitchListTile(
-            secondary: const Icon(Icons.vibration),
-            title: const Text('Vibración al terminar'),
-            value: _s.vibrationEnabled,
-            onChanged: (v) => _apply(_s.copyWith(vibrationEnabled: v)),
-          ),
-          ListTile(
-            leading: const Icon(Icons.notifications_active_outlined),
-            title: const Text('Estilo de notificación'),
-            subtitle: Text(_s.notificationStyle.description),
-            trailing: SegmentedButton<NotificationStyle>(
-              segments: const [
-                ButtonSegment(
-                  value: NotificationStyle.full,
-                  label: Text('Completa'),
-                ),
-                ButtonSegment(
-                  value: NotificationStyle.minimal,
-                  label: Text('Mínima'),
-                ),
-              ],
-              selected: {_s.notificationStyle},
-              onSelectionChanged: (set) =>
-                  _apply(_s.copyWith(notificationStyle: set.first)),
-            ),
-          ),
-          SwitchListTile(
-            secondary: const Icon(Icons.alarm_outlined),
-            title: const Text('Recordatorio diario'),
-            subtitle: const Text('Recibe un aviso para empezar a hacer pomodoros'),
-            value: _s.dailyReminderEnabled,
-            onChanged: (v) => _apply(_s.copyWith(dailyReminderEnabled: v)),
-          ),
-          if (_s.dailyReminderEnabled)
-            ListTile(
-              leading: const Icon(Icons.access_time),
-              title: const Text('Hora del recordatorio'),
-              trailing: TextButton(
-                onPressed: () async {
-                  final time = await showTimePicker(
-                    context: context,
-                    initialTime: TimeOfDay(
-                      hour: _s.dailyReminderHour,
-                      minute: _s.dailyReminderMinute,
-                    ),
-                  );
-                  if (time != null) {
-                    _apply(
-                      _s.copyWith(
-                        dailyReminderHour: time.hour,
-                        dailyReminderMinute: time.minute,
-                      ),
-                    );
-                  }
-                },
-                child: Text(
-                  '${_s.dailyReminderHour.toString().padLeft(2, '0')}:${_s.dailyReminderMinute.toString().padLeft(2, '0')}',
-                  style: Theme.of(context).textTheme.titleMedium?.copyWith(
-                    fontWeight: FontWeight.bold,
+              if (_s.soundEnabled)
+                ListTile(
+                  leading: const Icon(Icons.queue_music_outlined),
+                  title: const Text('Sonido de aviso'),
+                  trailing: DropdownButton<AlertSound>(
+                    value: _s.alertSound,
+                    onChanged: (sound) {
+                      if (sound != null) _apply(_s.copyWith(alertSound: sound));
+                    },
+                    items: [
+                      for (final sound in AlertSound.values)
+                        DropdownMenuItem(value: sound, child: Text(sound.label)),
+                    ],
                   ),
                 ),
+              SwitchListTile(
+                secondary: const Icon(Icons.vibration),
+                title: const Text('Vibración al terminar'),
+                value: _s.vibrationEnabled,
+                onChanged: (v) => _apply(_s.copyWith(vibrationEnabled: v)),
               ),
-            ),
+              _SegmentedTile<NotificationStyle>(
+                icon: Icons.notifications_active_outlined,
+                title: 'Estilo de notificación',
+                subtitle: _s.notificationStyle.description,
+                segments: const [
+                  ButtonSegment(value: NotificationStyle.full, label: Text('Completa')),
+                  ButtonSegment(value: NotificationStyle.minimal, label: Text('Mínima')),
+                ],
+                selected: _s.notificationStyle,
+                onChanged: (v) => _apply(_s.copyWith(notificationStyle: v)),
+              ),
+              SwitchListTile(
+                secondary: const Icon(Icons.alarm_outlined),
+                title: const Text('Recordatorio diario'),
+                subtitle: const Text('Recibe un aviso para empezar a hacer pomodoros'),
+                value: _s.dailyReminderEnabled,
+                onChanged: (v) => _apply(_s.copyWith(dailyReminderEnabled: v)),
+              ),
+              if (_s.dailyReminderEnabled)
+                ListTile(
+                  leading: const Icon(Icons.access_time),
+                  title: const Text('Hora del recordatorio'),
+                  trailing: TextButton(
+                    onPressed: _pickReminderTime,
+                    child: Text(
+                      reminderText,
+                      style: textTheme.titleMedium?.copyWith(
+                        fontWeight: FontWeight.bold,
+                      ),
+                    ),
+                  ),
+                ),
+            ],
+          ),
           const _SectionHeader('Ayuda'),
-          ListTile(
-            leading: Icon(
-              Icons.battery_saver_outlined,
-              color: scheme.onSurfaceVariant,
-            ),
-            title: const Text('¿No suena con la app cerrada?'),
-            subtitle: const Text(
-              'En Ajustes de Android > Apps > Pomodoro > Batería, elige '
+          _SettingsCard(
+            children: [
+              ListTile(
+                leading: Icon(
+                  Icons.battery_saver_outlined,
+                  color: scheme.onSurfaceVariant,
+                ),
+                title: const Text('¿No suena con la app cerrada?'),
+                subtitle: const Text(
+                  'En Ajustes de Android > Apps > Pomodoro > Batería, elige '
                   '«Sin restricciones». Algunos teléfonos también tienen '
                   '«Inicio automático».',
-            ),
+                ),
+              ),
+            ],
           ),
         ],
       ),
@@ -386,13 +465,96 @@ class _SectionHeader extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Padding(
-      padding: const EdgeInsets.fromLTRB(16, 24, 16, 4),
+      padding: const EdgeInsets.fromLTRB(8, 24, 8, 8),
       child: Text(
         text,
         style: Theme.of(context).textTheme.titleSmall?.copyWith(
           color: Theme.of(context).colorScheme.primary,
           fontWeight: FontWeight.w600,
         ),
+      ),
+    );
+  }
+}
+
+/// Agrupa los ajustes de una sección en una tarjeta redondeada.
+class _SettingsCard extends StatelessWidget {
+  const _SettingsCard({required this.children});
+
+  final List<Widget> children;
+
+  @override
+  Widget build(BuildContext context) {
+    return Card(
+      margin: EdgeInsets.zero,
+      elevation: 0,
+      color: Theme.of(context).colorScheme.surfaceContainerLow,
+      clipBehavior: Clip.antiAlias,
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+      child: Column(children: children),
+    );
+  }
+}
+
+/// Fila con título arriba y un SegmentedButton a todo el ancho debajo
+/// (antes iba como `trailing` y se salía de pantallas estrechas).
+class _SegmentedTile<T> extends StatelessWidget {
+  const _SegmentedTile({
+    required this.icon,
+    required this.title,
+    required this.segments,
+    required this.selected,
+    required this.onChanged,
+    this.subtitle,
+  });
+
+  final IconData icon;
+  final String title;
+  final String? subtitle;
+  final List<ButtonSegment<T>> segments;
+  final T selected;
+  final ValueChanged<T> onChanged;
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    final textTheme = Theme.of(context).textTheme;
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(16, 12, 16, 12),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Icon(icon, color: scheme.onSurfaceVariant),
+              const SizedBox(width: 16),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(title, style: textTheme.bodyLarge),
+                    if (subtitle != null)
+                      Text(
+                        subtitle!,
+                        style: textTheme.bodySmall?.copyWith(
+                          color: scheme.onSurfaceVariant,
+                        ),
+                      ),
+                  ],
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 12),
+          SizedBox(
+            width: double.infinity,
+            child: SegmentedButton<T>(
+              segments: segments,
+              selected: {selected},
+              onSelectionChanged: (set) => onChanged(set.first),
+            ),
+          ),
+        ],
       ),
     );
   }
@@ -463,4 +625,4 @@ class _SliderTileState extends State<_SliderTile> {
       ),
     );
   }
-}
+}

@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:dynamic_color/dynamic_color.dart';
 import 'package:material_ui/material_ui.dart';
 
@@ -12,6 +14,13 @@ Future<void> main() async {
   final settings = await PomodoroSettings.load();
   final controller = await TimerController.load(settings);
   runApp(PomodoroApp(controller: controller));
+
+  // Si la app se abrió tocando un botón de la notificación de fin de fase
+  // (p. ej. "Iniciar descanso"), se ejecuta ahora que el controlador existe.
+  final launchAction = await NotificationService.instance.launchActionId();
+  if (launchAction != null) {
+    unawaited(controller.handleNotificationAction(launchAction));
+  }
 }
 
 class PomodoroApp extends StatelessWidget {
@@ -29,10 +38,11 @@ class PomodoroApp extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return ListenableBuilder(
-      listenable: controller,
-      builder: (context, _) {
-        final settings = controller.settings;
+    // Solo escucha los ajustes: antes escuchaba al controlador entero y toda la
+    // MaterialApp se reconstruía 4 veces por segundo mientras corría el reloj.
+    return ValueListenableBuilder<PomodoroSettings>(
+      valueListenable: controller.settingsListenable,
+      builder: (context, settings, _) {
         final themeMode = _flutterThemeMode(settings.themeMode);
 
         return DynamicColorBuilder(
@@ -46,8 +56,15 @@ class PomodoroApp extends StatelessWidget {
                 );
 
             if (settings.amoledMode) {
+              // Negro puro de fondo y superficies casi negras para las tarjetas,
+              // para que sigan distinguiéndose sin romper el efecto AMOLED.
               darkScheme = darkScheme.copyWith(
                 surface: Colors.black,
+                surfaceContainerLowest: Colors.black,
+                surfaceContainerLow: const Color(0xFF0C0C0C),
+                surfaceContainer: const Color(0xFF121212),
+                surfaceContainerHigh: const Color(0xFF181818),
+                surfaceContainerHighest: const Color(0xFF212121),
                 onSurface: Colors.white,
               );
             }
@@ -72,4 +89,4 @@ class PomodoroApp extends StatelessWidget {
       },
     );
   }
-}
+}

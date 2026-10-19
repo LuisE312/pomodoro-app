@@ -99,5 +99,71 @@ void main() {
       final stats = await StatsRepository.load();
       expect(stats, isNotEmpty);
     });
+
+    test('la sesión recuperada con la app cerrada se guarda con su hora real de fin', () async {
+      const settings = PomodoroSettings(focusMinutes: 25, shortBreakMinutes: 5, autoStartNext: true);
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setInt('timer_phase', 0);
+      await prefs.setBool('timer_running', true);
+      await prefs.setInt('timer_initial_ms', const Duration(minutes: 25).inMilliseconds);
+      final pastEnd = DateTime.now().subtract(const Duration(minutes: 1));
+      await prefs.setInt('timer_end_ms', pastEnd.millisecondsSinceEpoch);
+
+      await TimerController.load(settings);
+
+      final sessions = await StatsRepository.loadSessions();
+      expect(sessions.length, 1);
+      expect(sessions.single.timestamp.millisecondsSinceEpoch, pastEnd.millisecondsSinceEpoch);
+    });
+
+    Future<void> seedFinishedFocus() async {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setInt('timer_phase', 0);
+      await prefs.setBool('timer_running', true);
+      await prefs.setInt('timer_initial_ms', const Duration(minutes: 25).inMilliseconds);
+      final pastEnd = DateTime.now().subtract(const Duration(minutes: 1));
+      await prefs.setInt('timer_end_ms', pastEnd.millisecondsSinceEpoch);
+    }
+
+    test('una sesión recuperada emite un evento y anuncia el logro "Primera sesión"', () async {
+      const settings = PomodoroSettings(focusMinutes: 25, shortBreakMinutes: 5, autoStartNext: true);
+      await seedFinishedFocus();
+
+      final controller = await TimerController.load(settings);
+
+      final event = controller.sessionEvents.value;
+      expect(event, isNotNull);
+      expect(event!.minutes, 25);
+      expect(event.unlocked.map((a) => a.id), contains('first_session'));
+    });
+
+    test('los logros que ya tenías no se vuelven a anunciar', () async {
+      const settings = PomodoroSettings(focusMinutes: 25, shortBreakMinutes: 5, autoStartNext: true);
+      await StatsRepository.recordSession(
+        25,
+        at: DateTime.now().subtract(const Duration(days: 3)),
+      );
+      await seedFinishedFocus();
+
+      final controller = await TimerController.load(settings);
+
+      final event = controller.sessionEvents.value;
+      expect(event, isNotNull);
+      expect(event!.unlocked.map((a) => a.id), isNot(contains('first_session')));
+    });
+
+    test('handleNotificationAction: start_next inicia la fase y es idempotente', () async {
+      const settings = PomodoroSettings();
+      final controller = await TimerController.load(settings);
+
+      await controller.handleNotificationAction('start_next');
+      expect(controller.isRunning, true);
+
+      await controller.handleNotificationAction('start_next'); // no debe romper nada
+      expect(controller.isRunning, true);
+
+      await controller.handleNotificationAction('pause');
+      expect(controller.isRunning, false);
+    });
   });
-}
+}

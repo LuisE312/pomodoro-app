@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
+import 'package:flutter_timezone/flutter_timezone.dart';
 import 'package:timezone/data/latest_all.dart' as tzdata;
 import 'package:timezone/timezone.dart' as tz;
 
@@ -31,6 +32,19 @@ void notificationTapBackground(NotificationResponse response) {
   }
 }
 
+/// Fin de una fase ya calculado: cuándo termina y qué fase viene después.
+class PhaseEnd {
+  const PhaseEnd({
+    required this.endTime,
+    required this.endingPhase,
+    required this.nextPhase,
+  });
+
+  final DateTime endTime;
+  final PomodoroPhase endingPhase;
+  final PomodoroPhase nextPhase;
+}
+
 /// Todo lo relacionado con notificaciones, en un solo lugar.
 class NotificationService {
   NotificationService._();
@@ -39,7 +53,15 @@ class NotificationService {
   static const int _runningId = 1; // notificación fija del temporizador
   static const int _endId = 2; // aviso de fin de fase
   static const int _reminderId = 3; // recordatorio diario
+  static const int _chainBaseId = 100; // avisos de fases encadenadas: 101..
   static const String _runningChannelId = 'pomodoro_running';
+
+  /// Cuántos fines de fase se programan por adelantado con "inicio automático".
+  static const int chainLength = 8;
+
+  /// Lo registra el [TimerController] mientras la app está viva. Si existe, las
+  /// acciones de las notificaciones van a él y no al motor sin interfaz.
+  Future<void> Function(String actionId)? actionHandler;
 
   final FlutterLocalNotificationsPlugin _plugin =
       FlutterLocalNotificationsPlugin();
@@ -50,17 +72,48 @@ class NotificationService {
 
   Future<void> init() async {
     tzdata.initializeTimeZones();
+    await _configureLocalTimezone();
     await _plugin.initialize(
       settings: const InitializationSettings(
         android: AndroidInitializationSettings('ic_stat_timer'),
       ),
       onDidReceiveBackgroundNotificationResponse: notificationTapBackground,
       onDidReceiveNotificationResponse: (response) {
-        if (response.actionId != null) {
+        final actionId = response.actionId;
+        if (actionId == null) return;
+        final handler = actionHandler;
+        if (handler != null) {
+          unawaited(handler(actionId));
+        } else {
           notificationTapBackground(response);
         }
       },
     );
+  }
+
+  /// Sin esto `tz.local` es UTC y el recordatorio diario sonaría a la hora
+  /// equivocada. Acepta tanto la API antigua (String) como la nueva (objeto
+  /// con `identifier`) de flutter_timezone.
+  Future<void> _configureLocalTimezone() async {
+    try {
+      final dynamic info = await FlutterTimezone.getLocalTimezone();
+      final String name = info is String ? info : info.identifier as String;
+      tz.setLocalLocation(tz.getLocation(name));
+    } catch (e) {
+      debugPrint('No se pudo detectar la zona horaria, se usa UTC: $e');
+    }
+  }
+
+  /// Si la app se abrió tocando un botón de una notificación (por ejemplo
+  /// "Iniciar descanso") devuelve el id de esa acción.
+  Future<String?> launchActionId() async {
+    try {
+      final details = await _plugin.getNotificationAppLaunchDetails();
+      if (details?.didNotificationLaunchApp ?? false) {
+        return details?.notificationResponse?.actionId;
+      }
+    } catch (_) {}
+    return null;
   }
 
   Future<void> updateDailyReminder(PomodoroSettings s) async {
@@ -121,12 +174,19 @@ class NotificationService {
       };
 
   /// En Android 8+ el sonido y la vibración pertenecen al "canal".
-  NotificationDetails _endDetails(PomodoroSettings s) {
+  NotificationDetails _endDetails(
+    PomodoroSettings s, {
+    required bool focusEnding,
+  }) {
     final sound = s.soundEnabled;
     final vibration = s.vibrationEnabled;
     final soundName = s.alertSound.rawName;
     final parts = [if (sound) 'sonido ($soundName)', if (vibration) 'vibración'];
     final label = parts.isEmpty ? 'silencioso' : parts.join(' y ');
+
+    // Con inicio automático la siguiente fase ya arranca sola: sin botón.
+    final showAction =
+        s.notificationStyle == NotificationStyle.full && !s.autoStartNext;
 
     return NotificationDetails(
       android: AndroidNotificationDetails(
@@ -142,6 +202,18 @@ class NotificationService {
             vibration ? Int64List.fromList([0, 500, 250, 500, 250, 500]) : null,
         category: AndroidNotificationCategory.alarm,
         visibility: NotificationVisibility.public,
+        // showsUserInterface: true abre la app, que es la que avanza de fase
+        // y registra la sesión; así el botón funciona aunque la app estuviera
+        // cerrada.
+        actions: showAction
+            ? [
+                AndroidNotificationAction(
+                  'start_next',
+                  focusEnding ? 'Iniciar descanso' : 'Iniciar enfoque',
+                  showsUserInterface: true,
+                ),
+              ]
+            : null,
       ),
     );
   }
@@ -152,21 +224,53 @@ class NotificationService {
     required PomodoroPhase endingPhase,
     required PomodoroPhase nextPhase,
     required PomodoroSettings settings,
+  }) {
+    return _scheduleEndAt(
+      id: _endId,
+      end: PhaseEnd(
+        endTime: endTime,
+        endingPhase: endingPhase,
+        nextPhase: nextPhase,
+      ),
+      settings: settings,
+    );
+  }
+
+  /// Programa varios fines de fase seguidos. Con "inicio automático" las fases
+  /// siguientes arrancan solas aunque la app esté cerrada, y así suena un aviso
+  /// al final de cada una (no solo de la primera).
+  Future<void> scheduleEndChain({
+    required List<PhaseEnd> ends,
+    required PomodoroSettings settings,
   }) async {
-    final focusEnding = endingPhase == PomodoroPhase.focus;
+    for (var i = 0; i < ends.length; i++) {
+      await _scheduleEndAt(
+        id: i == 0 ? _endId : _chainBaseId + i,
+        end: ends[i],
+        settings: settings,
+      );
+    }
+  }
+
+  Future<bool> _scheduleEndAt({
+    required int id,
+    required PhaseEnd end,
+    required PomodoroSettings settings,
+  }) async {
+    final focusEnding = end.endingPhase == PomodoroPhase.focus;
     final title = focusEnding ? '¡Enfoque terminado!' : 'Descanso terminado';
     final body = focusEnding
-        ? 'Es hora de: ${nextPhase.label.toLowerCase()}'
+        ? 'Es hora de: ${end.nextPhase.label.toLowerCase()}'
         : 'Listo para el siguiente enfoque';
     final tzDate = tz.TZDateTime.fromMillisecondsSinceEpoch(
       tz.UTC,
-      endTime.millisecondsSinceEpoch,
+      end.endTime.millisecondsSinceEpoch,
     );
-    final details = _endDetails(settings);
+    final details = _endDetails(settings, focusEnding: focusEnding);
 
     try {
       await _plugin.zonedSchedule(
-        id: _endId,
+        id: id,
         title: title,
         body: body,
         scheduledDate: tzDate,
@@ -178,7 +282,7 @@ class NotificationService {
       debugPrint('No se pudo programar la alarma exacta: $e. Intentando inexacta.');
       try {
         await _plugin.zonedSchedule(
-          id: _endId,
+          id: id,
           title: title,
           body: body,
           scheduledDate: tzDate,
@@ -264,67 +368,6 @@ class NotificationService {
     }
   }
 
-  Future<void> showCompleted({
-    required PomodoroPhase finishedPhase,
-    required PomodoroSettings settings,
-  }) async {
-    try {
-      final focusFinished = finishedPhase == PomodoroPhase.focus;
-      final fullStyle = settings.notificationStyle == NotificationStyle.full;
-
-      final actions = fullStyle
-          ? [
-              AndroidNotificationAction(
-                'start_next',
-                focusFinished ? 'Iniciar descanso' : 'Iniciar enfoque',
-                showsUserInterface: false,
-              ),
-              const AndroidNotificationAction(
-                'extend_5',
-                '+5 min',
-                showsUserInterface: false,
-              ),
-            ]
-          : null;
-
-      final sound = settings.soundEnabled;
-      final vibration = settings.vibrationEnabled;
-      final soundName = settings.alertSound.rawName;
-      final parts = [if (sound) 'sonido ($soundName)', if (vibration) 'vibración'];
-      final label = parts.isEmpty ? 'silencioso' : parts.join(' y ');
-
-      final details = NotificationDetails(
-        android: AndroidNotificationDetails(
-          'pomodoro_end_s${sound ? 1 : 0}_v${vibration ? 1 : 0}_$soundName',
-          'Fin de fase ($label)',
-          channelDescription: 'Avisa cuando termina una fase del temporizador',
-          importance: Importance.max,
-          priority: Priority.high,
-          playSound: sound,
-          sound: sound ? RawResourceAndroidNotificationSound(soundName) : null,
-          enableVibration: vibration,
-          vibrationPattern: vibration
-              ? Int64List.fromList([0, 500, 250, 500, 250, 500])
-              : null,
-          category: AndroidNotificationCategory.alarm,
-          visibility: NotificationVisibility.public,
-          actions: actions,
-        ),
-      );
-
-      await _plugin.show(
-        id: _endId,
-        title: focusFinished ? '¡Enfoque terminado!' : 'Descanso terminado',
-        body: focusFinished
-            ? '¡Buen trabajo! Tómate un descanso'
-            : 'Listo para el siguiente enfoque',
-        notificationDetails: details,
-      );
-    } catch (e) {
-      debugPrint('No se pudo mostrar la notificación de fin: $e');
-    }
-  }
-
   Future<void> showPaused({
     required PomodoroPhase phase,
     required Duration remaining,
@@ -382,15 +425,28 @@ class NotificationService {
     } catch (_) {}
   }
 
+  /// Cancela solo los avisos encadenados (fases 2, 3, ... por adelantado).
+  Future<void> cancelChain() async {
+    try {
+      for (var i = 1; i < chainLength; i++) {
+        await _plugin.cancel(id: _chainBaseId + i);
+      }
+    } catch (_) {}
+  }
+
+  /// Cancela el aviso de fin de fase y los encadenados.
   Future<void> cancelEnd() async {
     try {
       await _plugin.cancel(id: _endId);
     } catch (_) {}
+    await cancelChain();
   }
 
+  /// Cancela lo del temporizador. A propósito NO usa `cancelAll()` del plugin:
+  /// eso también borraba el recordatorio diario cada vez que se reiniciaba o
+  /// saltaba una fase.
   Future<void> cancelAll() async {
-    try {
-      await _plugin.cancelAll();
-    } catch (_) {}
+    await cancelRunning();
+    await cancelEnd();
   }
 }

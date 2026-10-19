@@ -8,22 +8,28 @@ class SessionRecord {
     required this.timestamp,
     required this.minutes,
     this.tag,
+    this.note,
   });
 
   final DateTime timestamp;
   final int minutes;
   final String? tag;
 
+  /// Nota opcional de una línea ("¿en qué trabajaste?").
+  final String? note;
+
   Map<String, dynamic> toJson() => {
         'timestamp': timestamp.toIso8601String(),
         'minutes': minutes,
         if (tag != null) 'tag': tag,
+        if (note != null) 'note': note,
       };
 
   factory SessionRecord.fromJson(Map<String, dynamic> json) => SessionRecord(
         timestamp: DateTime.parse(json['timestamp'] as String),
         minutes: json['minutes'] as int? ?? 0,
         tag: json['tag'] as String?,
+        note: json['note'] as String?,
       );
 }
 
@@ -127,11 +133,9 @@ class StatsRepository {
     }
   }
 
-  /// Carga las estadísticas agrupadas por día (mantiene compatibilidad total).
-  static Future<Map<String, DayStats>> load() async {
-    final sessions = await loadSessions();
+  /// Agrupa sesiones por día.
+  static Map<String, DayStats> _groupByDay(List<SessionRecord> sessions) {
     final Map<String, DayStats> map = {};
-
     for (final s in sessions) {
       final key = dayKey(s.timestamp);
       final current = map[key] ?? const DayStats();
@@ -140,35 +144,159 @@ class StatsRepository {
         minutes: current.minutes + s.minutes,
       );
     }
-
     return map;
   }
 
-  /// Registra una sesión de enfoque completada hoy en `sessions_v2`.
-  static Future<void> recordSession(int minutes, {String? tag}) async {
+  /// Carga las estadísticas agrupadas por día (mantiene compatibilidad total).
+  static Future<Map<String, DayStats>> load() async {
+    return _groupByDay(await loadSessions());
+  }
+
+  /// Guarda la lista completa (v2) y mantiene v1 sincronizado por compatibilidad.
+  static Future<void> _save(
+    SharedPreferences prefs,
+    List<SessionRecord> sessions,
+  ) async {
+    await prefs.setString(
+      _keyV2,
+      jsonEncode(sessions.map((s) => s.toJson()).toList()),
+    );
+    await prefs.setBool(_keyMigrated, true);
+    await prefs.setString(
+      _keyV1,
+      jsonEncode(
+        _groupByDay(sessions).map((k, v) => MapEntry(k, v.toJson())),
+      ),
+    );
+  }
+
+  /// Registra una sesión de enfoque completada en `sessions_v2`.
+  ///
+  /// [at] es el momento en que terminó la sesión (por defecto, ahora). Importa
+  /// cuando la app estaba cerrada: así la sesión cae en su día y hora reales.
+  static Future<void> recordSession(
+    int minutes, {
+    String? tag,
+    DateTime? at,
+    String? note,
+  }) async {
     final prefs = await SharedPreferences.getInstance();
     await _ensureMigrated(prefs);
 
     final sessions = await loadSessions();
     sessions.add(
       SessionRecord(
-        timestamp: DateTime.now(),
+        timestamp: at ?? DateTime.now(),
         minutes: minutes,
         tag: tag,
+        note: _cleanNote(note),
       ),
     );
+    await _save(prefs, sessions);
+  }
 
-    await prefs.setString(
-      _keyV2,
-      jsonEncode(sessions.map((s) => s.toJson()).toList()),
-    );
+  /// Deja la nota en una sola línea y sin espacios sobrantes (null si queda vacía).
+  static String? _cleanNote(String? note) {
+    if (note == null) return null;
+    final text = note.replaceAll(RegExp(r'[\r\n]+'), ' ').trim();
+    return text.isEmpty ? null : text;
+  }
 
-    // Mantiene v1 sincronizado por compatibilidad retroactiva
-    final allV1 = await load();
-    await prefs.setString(
-      _keyV1,
-      jsonEncode(allV1.map((k, v) => MapEntry(k, v.toJson()))),
+  static bool _same(SessionRecord a, SessionRecord b) =>
+      a.timestamp == b.timestamp && a.minutes == b.minutes && a.tag == b.tag;
+
+  /// Añade una sesión a mano (por ejemplo, una que olvidaste registrar).
+  static Future<void> addSession(SessionRecord session) async {
+    final prefs = await SharedPreferences.getInstance();
+    await _ensureMigrated(prefs);
+    final sessions = await loadSessions();
+    sessions.add(
+      SessionRecord(
+        timestamp: session.timestamp,
+        minutes: session.minutes,
+        tag: session.tag,
+        note: _cleanNote(session.note),
+      ),
     );
+    sessions.sort((a, b) => a.timestamp.compareTo(b.timestamp));
+    await _save(prefs, sessions);
+  }
+
+  /// Sustituye [original] por [updated]. Devuelve false si no la encuentra.
+  static Future<bool> updateSession(
+    SessionRecord original,
+    SessionRecord updated,
+  ) async {
+    final prefs = await SharedPreferences.getInstance();
+    await _ensureMigrated(prefs);
+    final sessions = await loadSessions();
+    final index = sessions.indexWhere((s) => _same(s, original));
+    if (index < 0) return false;
+    sessions[index] = SessionRecord(
+      timestamp: updated.timestamp,
+      minutes: updated.minutes,
+      tag: updated.tag,
+      note: _cleanNote(updated.note),
+    );
+    sessions.sort((a, b) => a.timestamp.compareTo(b.timestamp));
+    await _save(prefs, sessions);
+    return true;
+  }
+
+  /// Borra una sesión. Devuelve false si no la encuentra.
+  static Future<bool> deleteSession(SessionRecord session) async {
+    final prefs = await SharedPreferences.getInstance();
+    await _ensureMigrated(prefs);
+    final sessions = await loadSessions();
+    final index = sessions.indexWhere((s) => _same(s, session));
+    if (index < 0) return false;
+    sessions.removeAt(index);
+    await _save(prefs, sessions);
+    return true;
+  }
+
+  /// Pone (o quita, si queda vacía) la nota de la sesión que terminó en [timestamp].
+  static Future<bool> setNote(DateTime timestamp, String? note) async {
+    final prefs = await SharedPreferences.getInstance();
+    await _ensureMigrated(prefs);
+    final sessions = await loadSessions();
+    final index = sessions.indexWhere((s) => s.timestamp == timestamp);
+    if (index < 0) return false;
+    final s = sessions[index];
+    sessions[index] = SessionRecord(
+      timestamp: s.timestamp,
+      minutes: s.minutes,
+      tag: s.tag,
+      note: _cleanNote(note),
+    );
+    await _save(prefs, sessions);
+    return true;
+  }
+
+  /// Cambia el nombre de una etiqueta también en el historial, para que las
+  /// estadísticas no pierdan las sesiones antiguas.
+  static Future<void> renameTag(String oldName, String newName) async {
+    final prefs = await SharedPreferences.getInstance();
+    await _ensureMigrated(prefs);
+    final sessions = await loadSessions();
+    var changed = false;
+    final updated = <SessionRecord>[];
+    for (final s in sessions) {
+      if (s.tag == oldName) {
+        changed = true;
+        updated.add(
+          SessionRecord(
+            timestamp: s.timestamp,
+            minutes: s.minutes,
+            tag: newName,
+            note: s.note,
+          ),
+        );
+      } else {
+        updated.add(s);
+      }
+    }
+    if (changed) await _save(prefs, updated);
   }
 
   /// Borra todas las estadísticas guardadas.
@@ -312,62 +440,143 @@ class StatsRepository {
   static Future<String> exportCsv() async {
     final sessions = await loadSessions();
     final buffer = StringBuffer();
-    buffer.writeln('timestamp,minutes,tag');
+    buffer.writeln('timestamp,minutes,tag,note');
+    String esc(String? v) => v == null ? '' : '"${v.replaceAll('"', '""')}"';
     for (final s in sessions) {
-      final tagEscaped = s.tag != null ? '"${s.tag!.replaceAll('"', '""')}"' : '';
-      buffer.writeln('${s.timestamp.toIso8601String()},${s.minutes},$tagEscaped');
+      buffer.writeln(
+        '${s.timestamp.toIso8601String()},${s.minutes},${esc(s.tag)},${esc(s.note)}',
+      );
     }
     return buffer.toString();
   }
 
-  /// Importa el historial de sesiones desde una cadena JSON.
-  static Future<void> importJson(String jsonString) async {
-    final prefs = await SharedPreferences.getInstance();
-    final decoded = jsonDecode(jsonString) as List<dynamic>;
-    final sessions = decoded
-        .map((e) => SessionRecord.fromJson(e as Map<String, dynamic>))
-        .toList();
-    await prefs.setString(
-      _keyV2,
-      jsonEncode(sessions.map((s) => s.toJson()).toList()),
-    );
-    await prefs.setBool(_keyMigrated, true);
-    final allV1 = await load();
-    await prefs.setString(
-      _keyV1,
-      jsonEncode(allV1.map((k, v) => MapEntry(k, v.toJson()))),
-    );
-  }
+  /// Clave para detectar sesiones repetidas al combinar.
+  static String _sessionKey(SessionRecord s) =>
+      '${s.timestamp.toIso8601String()}|${s.minutes}|${s.tag ?? ''}';
 
-  /// Importa el historial de sesiones desde una cadena CSV.
-  static Future<void> importCsv(String csvString) async {
-    final lines = csvString.split('\n');
-    final List<SessionRecord> sessions = [];
-    for (var i = 1; i < lines.length; i++) {
-      final line = lines[i].trim();
-      if (line.isEmpty) continue;
-      final parts = line.split(',');
-      if (parts.length >= 2) {
-        final timestamp = DateTime.tryParse(parts[0].replaceAll('"', '')) ?? DateTime.now();
-        final minutes = int.tryParse(parts[1].replaceAll('"', '')) ?? 25;
-        String? tag;
-        if (parts.length >= 3) {
-          tag = parts.sublist(2).join(',').replaceAll('"', '').trim();
-          if (tag.isEmpty) tag = null;
-        }
-        sessions.add(SessionRecord(timestamp: timestamp, minutes: minutes, tag: tag));
-      }
+  /// Guarda las sesiones importadas. Con [replace] false se combinan con las
+  /// existentes sin duplicar las que ya estaban; con true sustituyen todo.
+  /// Devuelve cuántas se añadieron y cuántas se omitieron (repetidas o no
+  /// válidas). Si el archivo no trae ninguna sesión válida lanza
+  /// [FormatException] y no toca nada, para no vaciar el historial por error.
+  static Future<({int added, int skipped})> _applyImport(
+    List<SessionRecord> incoming,
+    int invalid, {
+    required bool replace,
+  }) async {
+    if (incoming.isEmpty) {
+      throw const FormatException(
+        'El archivo no contiene sesiones válidas.',
+      );
     }
     final prefs = await SharedPreferences.getInstance();
-    await prefs.setString(
-      _keyV2,
-      jsonEncode(sessions.map((s) => s.toJson()).toList()),
-    );
-    await prefs.setBool(_keyMigrated, true);
-    final allV1 = await load();
-    await prefs.setString(
-      _keyV1,
-      jsonEncode(allV1.map((k, v) => MapEntry(k, v.toJson()))),
-    );
+    await _ensureMigrated(prefs);
+
+    final base = replace ? <SessionRecord>[] : await loadSessions();
+    final seen = base.map(_sessionKey).toSet();
+    var added = 0;
+    var skipped = invalid;
+    for (final s in incoming) {
+      if (seen.add(_sessionKey(s))) {
+        base.add(s);
+        added++;
+      } else {
+        skipped++;
+      }
+    }
+    base.sort((a, b) => a.timestamp.compareTo(b.timestamp));
+    await _save(prefs, base);
+    return (added: added, skipped: skipped);
+  }
+
+  /// Importa el historial de sesiones desde una cadena JSON.
+  static Future<({int added, int skipped})> importJson(
+    String jsonString, {
+    bool replace = false,
+  }) async {
+    final decoded = jsonDecode(jsonString) as List<dynamic>;
+    final incoming = <SessionRecord>[];
+    var invalid = 0;
+    for (final e in decoded) {
+      try {
+        final r = SessionRecord.fromJson(e as Map<String, dynamic>);
+        if (r.minutes > 0) {
+          incoming.add(r);
+        } else {
+          invalid++;
+        }
+      } catch (_) {
+        invalid++;
+      }
+    }
+    return _applyImport(incoming, invalid, replace: replace);
+  }
+
+  /// Parte una línea CSV respetando las comillas ("a,b" es un solo campo).
+  static List<String> _splitCsvLine(String line) {
+    final fields = <String>[];
+    final buf = StringBuffer();
+    var inQuotes = false;
+    for (var i = 0; i < line.length; i++) {
+      final c = line[i];
+      if (inQuotes) {
+        if (c == '"') {
+          if (i + 1 < line.length && line[i + 1] == '"') {
+            buf.write('"');
+            i++;
+          } else {
+            inQuotes = false;
+          }
+        } else {
+          buf.write(c);
+        }
+      } else if (c == '"') {
+        inQuotes = true;
+      } else if (c == ',') {
+        fields.add(buf.toString());
+        buf.clear();
+      } else {
+        buf.write(c);
+      }
+    }
+    fields.add(buf.toString());
+    return fields;
+  }
+
+  /// Importa el historial de sesiones desde una cadena CSV. Las filas con
+  /// fecha o minutos inválidos se omiten (antes se convertían en "ahora"/25).
+  static Future<({int added, int skipped})> importCsv(
+    String csvString, {
+    bool replace = false,
+  }) async {
+    final lines = csvString.split(RegExp(r'\r?\n'));
+    final incoming = <SessionRecord>[];
+    var invalid = 0;
+    for (var i = 0; i < lines.length; i++) {
+      final line = lines[i].trim();
+      if (line.isEmpty) continue;
+      if (i == 0 && line.toLowerCase().startsWith('timestamp')) continue;
+      final parts = _splitCsvLine(line);
+      final timestamp =
+          parts.isNotEmpty ? DateTime.tryParse(parts[0].trim()) : null;
+      final minutes = parts.length >= 2 ? int.tryParse(parts[1].trim()) : null;
+      if (timestamp == null || minutes == null || minutes <= 0) {
+        invalid++;
+        continue;
+      }
+      String? tag;
+      if (parts.length >= 3) {
+        tag = parts[2].trim();
+        if (tag.isEmpty) tag = null;
+      }
+      String? note;
+      if (parts.length >= 4) {
+        note = _cleanNote(parts.sublist(3).join(','));
+      }
+      incoming.add(
+        SessionRecord(timestamp: timestamp, minutes: minutes, tag: tag, note: note),
+      );
+    }
+    return _applyImport(incoming, invalid, replace: replace);
   }
 }

@@ -6,9 +6,14 @@ import 'notification_service.dart';
 import 'pomodoro_phase.dart';
 import 'settings.dart';
 
-/// Motor puro de estado del temporizador.
-/// Opera directamente con SharedPreferences para sincronizar el estado entre
-/// el Isolate principal de la UI y el Isolate en segundo plano de las notificaciones.
+/// Motor "sin interfaz" del temporizador.
+///
+/// Solo se usa cuando la app NO está viva y el usuario toca un botón de la
+/// notificación (Pausar, Reanudar, Saltar, +5 min): Android arranca entonces un
+/// isolate en segundo plano que no tiene [TimerController]. Con la app viva,
+/// las acciones van al controlador (ver `NotificationService.actionHandler`),
+/// que es el dueño del estado. Al volver a primer plano el controlador relee
+/// SharedPreferences, que es donde este motor deja el resultado.
 class TimerEngine {
   static const _kPhase = 'timer_phase';
   static const _kRunning = 'timer_running';
@@ -17,7 +22,9 @@ class TimerEngine {
   static const _kCompleted = 'timer_completed';
   static const _kInitial = 'timer_initial_ms';
 
-  static PomodoroPhase _phaseAfter(
+  /// Fase que sigue a [finished]. Es la única definición de la regla: la usa
+  /// también [TimerController] para no duplicarla.
+  static PomodoroPhase phaseAfter(
       PomodoroPhase finished, int completedFocus, PomodoroSettings settings) {
     if (finished != PomodoroPhase.focus) return PomodoroPhase.focus;
     final longBreakTurn = completedFocus > 0 &&
@@ -82,7 +89,7 @@ class TimerEngine {
     await NotificationService.instance.scheduleEnd(
       endTime: endTime,
       endingPhase: phase,
-      nextPhase: _phaseAfter(phase, completedAfter, settings),
+      nextPhase: phaseAfter(phase, completedAfter, settings),
       settings: settings,
     );
     await NotificationService.instance.showRunning(
@@ -104,7 +111,7 @@ class TimerEngine {
     final completedFocus = prefs.getInt(_kCompleted) ?? 0;
     final wasRunning = prefs.getBool(_kRunning) ?? false;
 
-    final nextPhase = _phaseAfter(currentPhase, completedFocus, settings);
+    final nextPhase = phaseAfter(currentPhase, completedFocus, settings);
     final nextDuration = settings.durationOf(nextPhase);
 
     await prefs.setInt(_kPhase, nextPhase.index);
@@ -120,7 +127,7 @@ class TimerEngine {
       await NotificationService.instance.scheduleEnd(
         endTime: endTime,
         endingPhase: nextPhase,
-        nextPhase: _phaseAfter(nextPhase, completedAfter, settings),
+        nextPhase: phaseAfter(nextPhase, completedAfter, settings),
         settings: settings,
       );
       await NotificationService.instance.showRunning(
@@ -164,7 +171,7 @@ class TimerEngine {
       await NotificationService.instance.scheduleEnd(
         endTime: newEnd,
         endingPhase: phase,
-        nextPhase: _phaseAfter(phase, completedAfter, settings),
+        nextPhase: phaseAfter(phase, completedAfter, settings),
         settings: settings,
       );
       await NotificationService.instance.showRunning(
@@ -179,4 +186,4 @@ class TimerEngine {
       await NotificationService.instance.showPaused(phase: phase, remaining: newRemaining);
     }
   }
-}
+}

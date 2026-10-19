@@ -153,5 +153,132 @@ void main() {
       expect(sessions.length, 1);
       expect(sessions.first.minutes, 25);
     });
+
+    test('recordSession usa la hora indicada (sesiones con la app cerrada)', () async {
+      final end = DateTime(2026, 10, 9, 23, 50);
+      await StatsRepository.recordSession(25, at: end);
+      final sessions = await StatsRepository.loadSessions();
+      expect(sessions.single.timestamp, end);
+      expect((await StatsRepository.load())['2026-10-09']?.sessions, 1);
+    });
+
+    test('importar combinando no duplica sesiones existentes', () async {
+      await StatsRepository.recordSession(25, tag: 'Trabajo', at: DateTime(2026, 10, 1, 10));
+      final jsonStr = await StatsRepository.exportJson();
+      await StatsRepository.recordSession(30, tag: 'Estudio', at: DateTime(2026, 10, 2, 10));
+
+      final report = await StatsRepository.importJson(jsonStr); // combinar
+      expect(report.added, 0);
+      expect(report.skipped, 1);
+      expect((await StatsRepository.loadSessions()).length, 2);
+    });
+
+    test('importar reemplazando deja solo lo del archivo', () async {
+      await StatsRepository.recordSession(25, tag: 'Trabajo', at: DateTime(2026, 10, 1, 10));
+      final jsonStr = await StatsRepository.exportJson();
+      await StatsRepository.recordSession(30, tag: 'Estudio', at: DateTime(2026, 10, 2, 10));
+
+      await StatsRepository.importJson(jsonStr, replace: true);
+      expect((await StatsRepository.loadSessions()).length, 1);
+    });
+
+    test('un archivo sin sesiones válidas no borra el historial', () async {
+      await StatsRepository.recordSession(25, at: DateTime(2026, 10, 1, 10));
+      await expectLater(
+        StatsRepository.importJson('[]', replace: true),
+        throwsA(isA<FormatException>()),
+      );
+      await expectLater(
+        StatsRepository.importCsv('timestamp,minutes,tag\nbasura,x,y', replace: true),
+        throwsA(isA<FormatException>()),
+      );
+      expect((await StatsRepository.loadSessions()).length, 1);
+    });
+
+    test('CSV: respeta comas entre comillas y omite filas inválidas', () async {
+      const csv = 'timestamp,minutes,tag\n'
+          '2026-10-01T10:00:00.000,25,"Trabajo, oficina"\n'
+          'no-es-fecha,25,Estudio\n'
+          '2026-10-02T10:00:00.000,abc,Estudio\n'
+          '2026-10-03T10:00:00.000,40,\n';
+      final report = await StatsRepository.importCsv(csv);
+      expect(report.added, 2);
+      expect(report.skipped, 2);
+      final sessions = await StatsRepository.loadSessions();
+      expect(sessions.first.tag, 'Trabajo, oficina');
+      expect(sessions.last.tag, isNull);
+    });
+
+    test('renameTag actualiza también el historial', () async {
+      await StatsRepository.recordSession(25, tag: 'Trabajo', at: DateTime(2026, 10, 1, 10));
+      await StatsRepository.recordSession(25, tag: 'Estudio', at: DateTime(2026, 10, 2, 10));
+      await StatsRepository.renameTag('Trabajo', 'Oficina');
+      final tags = (await StatsRepository.loadSessions()).map((s) => s.tag).toList();
+      expect(tags, ['Oficina', 'Estudio']);
+    });
+
+    test('las notas se limpian y viajan en JSON y CSV', () async {
+      await StatsRepository.recordSession(
+        25,
+        tag: 'Trabajo',
+        at: DateTime(2026, 10, 1, 10),
+        note: '  Informe, "versión 2"\nfinal ',
+      );
+      const expected = 'Informe, "versión 2" final';
+      expect((await StatsRepository.loadSessions()).single.note, expected);
+
+      final jsonStr = await StatsRepository.exportJson();
+      final csvStr = await StatsRepository.exportCsv();
+
+      await StatsRepository.clear();
+      await StatsRepository.importJson(jsonStr);
+      expect((await StatsRepository.loadSessions()).single.note, expected);
+
+      await StatsRepository.clear();
+      await StatsRepository.importCsv(csvStr);
+      expect((await StatsRepository.loadSessions()).single.note, expected);
+    });
+
+    test('editar, añadir y borrar sesiones', () async {
+      final a = DateTime(2026, 10, 1, 10);
+      await StatsRepository.recordSession(25, tag: 'Trabajo', at: a);
+      final original = (await StatsRepository.loadSessions()).single;
+
+      final updated = await StatsRepository.updateSession(
+        original,
+        SessionRecord(timestamp: a, minutes: 40, tag: 'Estudio', note: 'Mates'),
+      );
+      expect(updated, true);
+      var list = await StatsRepository.loadSessions();
+      expect(list.single.minutes, 40);
+      expect(list.single.tag, 'Estudio');
+      expect(list.single.note, 'Mates');
+
+      await StatsRepository.addSession(
+        SessionRecord(timestamp: DateTime(2026, 10, 2, 9), minutes: 30),
+      );
+      expect((await StatsRepository.loadSessions()).length, 2);
+
+      expect(await StatsRepository.deleteSession(list.single), true);
+      list = await StatsRepository.loadSessions();
+      expect(list.single.minutes, 30);
+      expect(await StatsRepository.deleteSession(original), false);
+    });
+
+    test('setNote pone y quita la nota; renameTag la conserva', () async {
+      final a = DateTime(2026, 10, 1, 10);
+      await StatsRepository.recordSession(25, tag: 'Trabajo', at: a);
+      expect(await StatsRepository.setNote(a, 'Informe'), true);
+
+      await StatsRepository.renameTag('Trabajo', 'Oficina');
+      var s = (await StatsRepository.loadSessions()).single;
+      expect(s.tag, 'Oficina');
+      expect(s.note, 'Informe');
+
+      await StatsRepository.setNote(a, '   ');
+      s = (await StatsRepository.loadSessions()).single;
+      expect(s.note, isNull);
+      expect(await StatsRepository.setNote(DateTime(2000), 'x'), false);
+    });
   });
-}
+}
