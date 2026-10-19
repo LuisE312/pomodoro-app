@@ -1,5 +1,6 @@
 import 'dart:async';
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter/widgets.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -8,7 +9,9 @@ import 'package:wakelock_plus/wakelock_plus.dart';
 import 'notification_service.dart';
 import 'pomodoro_phase.dart';
 import 'settings.dart';
+import 'achievements.dart';
 import 'stats.dart';
+import 'timer_engine.dart';
 
 /// Lógica del temporizador, independiente de la pantalla.
 class TimerController extends ChangeNotifier with WidgetsBindingObserver {
@@ -40,6 +43,16 @@ class TimerController extends ChangeNotifier with WidgetsBindingObserver {
   final NotificationService _notifications = NotificationService.instance;
 
   int _todaySessions = 0;
+  DateTime _today = DateTime.now(); // día al que pertenece _todaySessions
+  bool _disposed = false;
+  final _TickNotifier _ticks = _TickNotifier();
+  late final ValueNotifier<PomodoroSettings> _settingsNotifier =
+      ValueNotifier<PomodoroSettings>(_settings);
+
+  static const String _kSeenAchievements = 'achievements_seen';
+  final ValueNotifier<SessionEvent?> _sessionEvents =
+      ValueNotifier<SessionEvent?>(null);
+  Set<String> _seenAchievements = {};
 
   /// Recupera el estado guardado (si lo hay) y deja el controlador listo.
   static Future<TimerController> load(PomodoroSettings settings) async {
@@ -72,6 +85,10 @@ class TimerController extends ChangeNotifier with WidgetsBindingObserver {
     controller._todaySessions =
         statsData[StatsRepository.dayKey(DateTime.now())]?.sessions ?? 0;
 
+    NotificationService.instance.actionHandler =
+        controller.handleNotificationAction;
+
+    await controller._loadSeenAchievements();
     await controller._notifications.updateDailyReminder(settings);
     await controller.syncFromClock();
     controller._updateTicker();
@@ -84,7 +101,21 @@ class TimerController extends ChangeNotifier with WidgetsBindingObserver {
   PomodoroPhase get phase => _phase;
   bool get isRunning => _isRunning;
   Duration get total => _phaseInitialDuration;
-  int get todaySessions => _todaySessions;
+
+  /// Sesiones de enfoque de hoy. Si cambió el día y aún no se recontó, 0.
+  int get todaySessions => _isToday(_today) ? _todaySessions : 0;
+
+  /// Cambia solo cuando cambian los ajustes (tema, etiquetas, duraciones...).
+  /// La `MaterialApp` escucha esto y no el reloj.
+  ValueListenable<PomodoroSettings> get settingsListenable => _settingsNotifier;
+
+  /// Late 4 veces por segundo mientras corre el reloj. Solo lo escucha el
+  /// anillo del temporizador, para no reconstruir toda la pantalla.
+  Listenable get ticks => _ticks;
+
+  /// Se actualiza cada vez que se registra una sesión de enfoque (con los
+  /// logros que desbloqueó, si alguno). La interfaz lo usa para avisar.
+  ValueListenable<SessionEvent?> get sessionEvents => _sessionEvents;
 
   Duration get remaining {
     final end = _endTime;
@@ -202,7 +233,7 @@ class TimerController extends ChangeNotifier with WidgetsBindingObserver {
   Future<void> applySettings(PomodoroSettings updated) async {
     // Si la fase está intacta (no iniciada ni pausada a medias), adopta la nueva duración.
     final untouched = !_isRunning && _remaining == _phaseInitialDuration;
-    _settings = updated;
+    _setSettings(updated);
     if (untouched) {
       _phaseInitialDuration = _settings.durationOf(_phase);
       _remaining = _phaseInitialDuration;
@@ -217,6 +248,7 @@ class TimerController extends ChangeNotifier with WidgetsBindingObserver {
 
   /// Si la fase ya debería haber terminado, calcula en bucle las fases transcurridas.
   Future<void> syncFromClock() async {
+    _rollDayIfNeeded();
     if (!_isRunning || _endTime == null) return;
 
     final now = DateTime.now();
@@ -227,10 +259,18 @@ class TimerController extends ChangeNotifier with WidgetsBindingObserver {
         final finishedPhase = _phase;
         if (finishedPhase == PomodoroPhase.focus) {
           _completedFocus++;
-          _todaySessions++;
+          // La sesión terminó en `phaseEnd`, no ahora: así cae en el día y la
+          // franja horaria correctos aunque la app estuviera cerrada.
+          if (_isSameDay(phaseEnd, now)) _todaySessions++;
           await StatsRepository.recordSession(
             _phaseInitialDuration.inMinutes,
             tag: _settings.selectedTag,
+            at: phaseEnd,
+          );
+          await _emitSessionEvent(
+            phaseEnd,
+            _phaseInitialDuration.inMinutes,
+            _settings.selectedTag,
           );
         }
 
@@ -261,15 +301,55 @@ class TimerController extends ChangeNotifier with WidgetsBindingObserver {
 
   // ---------- Internos ----------
 
-  PomodoroPhase _phaseAfter(PomodoroPhase finished, int completedFocus) {
-    if (finished != PomodoroPhase.focus) return PomodoroPhase.focus;
-    final longBreakTurn = completedFocus > 0 &&
-        completedFocus % _settings.cyclesBeforeLongBreak == 0;
-    return longBreakTurn ? PomodoroPhase.longBreak : PomodoroPhase.shortBreak;
+  PomodoroPhase _phaseAfter(PomodoroPhase finished, int completedFocus) =>
+      TimerEngine.phaseAfter(finished, completedFocus, _settings);
+
+  void _setSettings(PomodoroSettings updated) {
+    _settings = updated;
+    _settingsNotifier.value = updated;
+  }
+
+  static bool _isSameDay(DateTime a, DateTime b) =>
+      a.year == b.year && a.month == b.month && a.day == b.day;
+
+  bool _isToday(DateTime d) => _isSameDay(d, DateTime.now());
+
+  /// Si cambió el día, el contador de "hoy" vuelve a cero y se recuenta.
+  void _rollDayIfNeeded() {
+    if (_isToday(_today)) return;
+    _today = DateTime.now();
+    _todaySessions = 0;
+    notifyListeners();
+    unawaited(_reloadToday());
+  }
+
+  /// Relee de las estadísticas cuántas sesiones van hoy.
+  Future<void> _reloadToday() async {
+    final data = await StatsRepository.load();
+    if (_disposed) return;
+    _today = DateTime.now();
+    _todaySessions = data[StatsRepository.dayKey(_today)]?.sessions ?? 0;
+    notifyListeners();
+  }
+
+  /// Punto único de entrada para los botones de las notificaciones cuando la
+  /// app está viva (o se acaba de abrir por uno de ellos).
+  Future<void> handleNotificationAction(String actionId) async {
+    // En segundo plano el reloj de la UI está parado: ponemos el estado al día.
+    await syncFromClock();
+    if (actionId == 'pause') {
+      await pause();
+    } else if (actionId == 'resume' || actionId == 'start_next') {
+      await start(); // no hace nada si ya está corriendo
+    } else if (actionId == 'skip') {
+      await skip();
+    } else if (actionId == 'extend_5') {
+      await extend5Min();
+    }
   }
 
   Future<void> setSelectedTag(String? tag) async {
-    _settings = _settings.copyWith(selectedTag: tag);
+    _setSettings(_settings.copyWith(selectedTag: tag));
     notifyListeners();
     await _settings.save();
   }
@@ -279,11 +359,12 @@ class TimerController extends ChangeNotifier with WidgetsBindingObserver {
     if (finished == PomodoroPhase.focus) {
       _completedFocus++;
       _todaySessions++;
+      final minutes = _phaseInitialDuration.inMinutes;
+      final tag = _settings.selectedTag;
+      final at = DateTime.now();
       unawaited(
-        StatsRepository.recordSession(
-          _phaseInitialDuration.inMinutes,
-          tag: _settings.selectedTag,
-        ),
+        StatsRepository.recordSession(minutes, tag: tag, at: at)
+            .then((_) => _emitSessionEvent(at, minutes, tag)),
       );
     }
 
@@ -313,17 +394,79 @@ class TimerController extends ChangeNotifier with WidgetsBindingObserver {
     unawaited(_updateWakelock());
   }
 
+  /// Logros desbloqueados con el historial actual.
+  Future<List<Achievement>> _currentUnlocked() async {
+    final sessions = await StatsRepository.loadSessions();
+    final stats = await StatsRepository.load();
+    return Achievement.evaluate(sessions, stats).where((a) => a.unlocked).toList();
+  }
+
+  /// Carga qué logros ya se anunciaron. La primera vez (por ejemplo, al
+  /// actualizar la app) los que ya tienes se marcan como vistos para no
+  /// anunciarlos todos de golpe.
+  Future<void> _loadSeenAchievements() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final saved = prefs.getStringList(_kSeenAchievements);
+      if (saved != null) {
+        _seenAchievements = saved.toSet();
+        return;
+      }
+      final unlocked = await _currentUnlocked();
+      _seenAchievements = unlocked.map((a) => a.id).toSet();
+      await prefs.setStringList(_kSeenAchievements, _seenAchievements.toList());
+    } catch (e) {
+      debugPrint('No se pudieron leer los logros vistos: $e');
+    }
+  }
+
+  /// Avisa a la interfaz de que se registró una sesión y de qué logros
+  /// nuevos desbloqueó.
+  Future<void> _emitSessionEvent(DateTime at, int minutes, String? tag) async {
+    try {
+      final fresh = (await _currentUnlocked())
+          .where((a) => !_seenAchievements.contains(a.id))
+          .toList();
+      if (fresh.isNotEmpty) {
+        _seenAchievements.addAll(fresh.map((a) => a.id));
+        final prefs = await SharedPreferences.getInstance();
+        await prefs.setStringList(_kSeenAchievements, _seenAchievements.toList());
+      }
+      if (_disposed) return;
+      _sessionEvents.value = SessionEvent(
+        timestamp: at,
+        minutes: minutes,
+        tag: tag,
+        unlocked: fresh,
+      );
+    } catch (e) {
+      debugPrint('No se pudo emitir el evento de sesión: $e');
+    }
+  }
+
   Future<void> _scheduleNotifications() async {
     final end = _endTime;
     if (!_isRunning || end == null) return;
-    final completedAfter =
-        _phase == PomodoroPhase.focus ? _completedFocus + 1 : _completedFocus;
-    await _notifications.scheduleEnd(
-      endTime: end,
-      endingPhase: _phase,
-      nextPhase: _phaseAfter(_phase, completedAfter),
-      settings: _settings,
-    );
+
+    // Con inicio automático las fases siguientes arrancan solas aunque la app
+    // esté cerrada: se programa un aviso al final de cada una por adelantado.
+    // Sin inicio automático solo hay un aviso (y se limpian los sobrantes).
+    final steps = _settings.autoStartNext ? NotificationService.chainLength : 1;
+    final ends = <PhaseEnd>[];
+    var phase = _phase;
+    var completed = _completedFocus;
+    var at = end;
+    for (var i = 0; i < steps; i++) {
+      final completedAfter =
+          phase == PomodoroPhase.focus ? completed + 1 : completed;
+      final next = _phaseAfter(phase, completedAfter);
+      ends.add(PhaseEnd(endTime: at, endingPhase: phase, nextPhase: next));
+      completed = completedAfter;
+      phase = next;
+      at = at.add(_settings.durationOf(next));
+    }
+    if (steps == 1) await _notifications.cancelChain();
+    await _notifications.scheduleEndChain(ends: ends, settings: _settings);
     await _notifications.showRunning(
       phase: _phase,
       endTime: end,
@@ -338,11 +481,12 @@ class TimerController extends ChangeNotifier with WidgetsBindingObserver {
     _ticker = null;
     if (_isRunning && _foreground) {
       _ticker = Timer.periodic(const Duration(milliseconds: 250), (_) {
+        _rollDayIfNeeded();
         final end = _endTime;
         if (end != null && !DateTime.now().isBefore(end)) {
           _completePhase();
         } else {
-          notifyListeners();
+          _ticks.tick(); // solo repinta el anillo, no toda la app
         }
       });
     }
@@ -382,7 +526,9 @@ class TimerController extends ChangeNotifier with WidgetsBindingObserver {
       if (initialMs != null) _phaseInitialDuration = Duration(milliseconds: initialMs);
       if (remainingMs != null) _remaining = Duration(milliseconds: remainingMs);
 
+      _rollDayIfNeeded();
       await syncFromClock();
+      await _reloadToday();
       _updateTicker();
       notifyListeners();
     } else if (state == AppLifecycleState.paused ||
@@ -394,8 +540,37 @@ class TimerController extends ChangeNotifier with WidgetsBindingObserver {
 
   @override
   void dispose() {
+    _disposed = true;
     WidgetsBinding.instance.removeObserver(this);
+    if (NotificationService.instance.actionHandler == handleNotificationAction) {
+      NotificationService.instance.actionHandler = null;
+    }
     _ticker?.cancel();
+    _ticks.dispose();
+    _settingsNotifier.dispose();
+    _sessionEvents.dispose();
     super.dispose();
   }
+}
+
+/// `ChangeNotifier` cuyo único propósito es avisar de cada tick del reloj.
+/// (`notifyListeners` es protegido, por eso hace falta la subclase.)
+class _TickNotifier extends ChangeNotifier {
+  void tick() => notifyListeners();
+}
+
+/// Una sesión de enfoque acaba de registrarse. [unlocked] son los logros que
+/// esa sesión desbloqueó por primera vez (normalmente, ninguno).
+class SessionEvent {
+  const SessionEvent({
+    required this.timestamp,
+    required this.minutes,
+    this.tag,
+    this.unlocked = const [],
+  });
+
+  final DateTime timestamp;
+  final int minutes;
+  final String? tag;
+  final List<Achievement> unlocked;
 }

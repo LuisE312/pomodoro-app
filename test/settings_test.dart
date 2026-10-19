@@ -44,5 +44,13 @@ void main() {
       expect(changed.shortBreakMinutes, original.shortBreakMinutes);
       expect(changed.vibrationEnabled, original.vibrationEnabled);
     });
+
+    test('modo enfoque: activado por defecto y se guarda', () async {
+      expect(const PomodoroSettings().immersiveFocus, true);
+
+      await const PomodoroSettings(immersiveFocus: false).save();
+      final loaded = await PomodoroSettings.load();
+      expect(loaded.immersiveFocus, false);
+    });
   });
-}
+}

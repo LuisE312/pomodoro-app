@@ -46,6 +46,7 @@ class PomodoroSettings {
     this.themeMode = AppThemeMode.system,
     this.amoledMode = false,
     this.keepScreenOn = false,
+    this.immersiveFocus = true,
     this.alertSound = AlertSound.bell,
     this.dailyReminderEnabled = false,
     this.dailyReminderHour = 9,
@@ -66,6 +67,9 @@ class PomodoroSettings {
   final AppThemeMode themeMode;
   final bool amoledMode;
   final bool keepScreenOn;
+
+  /// Oculta la barra de navegación mientras corre un enfoque.
+  final bool immersiveFocus;
   final AlertSound alertSound;
   final bool dailyReminderEnabled;
   final int dailyReminderHour;
@@ -93,6 +97,7 @@ class PomodoroSettings {
     AppThemeMode? themeMode,
     bool? amoledMode,
     bool? keepScreenOn,
+    bool? immersiveFocus,
     AlertSound? alertSound,
     bool? dailyReminderEnabled,
     int? dailyReminderHour,
@@ -114,6 +119,7 @@ class PomodoroSettings {
       themeMode: themeMode ?? this.themeMode,
       amoledMode: amoledMode ?? this.amoledMode,
       keepScreenOn: keepScreenOn ?? this.keepScreenOn,
+      immersiveFocus: immersiveFocus ?? this.immersiveFocus,
       alertSound: alertSound ?? this.alertSound,
       dailyReminderEnabled: dailyReminderEnabled ?? this.dailyReminderEnabled,
       dailyReminderHour: dailyReminderHour ?? this.dailyReminderHour,
@@ -156,6 +162,7 @@ class PomodoroSettings {
       themeMode: AppThemeMode.values[themeIndex],
       amoledMode: prefs.getBool('amoledMode') ?? d.amoledMode,
       keepScreenOn: prefs.getBool('keepScreenOn') ?? d.keepScreenOn,
+      immersiveFocus: prefs.getBool('immersiveFocus') ?? d.immersiveFocus,
       alertSound: AlertSound.values[soundIndex],
       dailyReminderEnabled:
           prefs.getBool('dailyReminderEnabled') ?? d.dailyReminderEnabled,
@@ -183,6 +190,7 @@ class PomodoroSettings {
     await prefs.setInt('themeMode', themeMode.index);
     await prefs.setBool('amoledMode', amoledMode);
     await prefs.setBool('keepScreenOn', keepScreenOn);
+    await prefs.setBool('immersiveFocus', immersiveFocus);
     await prefs.setInt('alertSound', alertSound.index);
     await prefs.setBool('dailyReminderEnabled', dailyReminderEnabled);
     await prefs.setInt('dailyReminderHour', dailyReminderHour);
@@ -194,4 +202,4 @@ class PomodoroSettings {
       await prefs.remove('selectedTag');
     }
   }
-}
+}
